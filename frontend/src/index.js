@@ -12,7 +12,7 @@ const App = () => {
     setError(null);
     
     try {
-      const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/api/v1/temperature/anomaly?forecast_hour=${hour}&use_mock=true`);
+      const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/api/v1/temperature/anomaly?forecast_hour=${hour}&use_mock=false`);
       
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);

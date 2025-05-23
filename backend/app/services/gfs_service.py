@@ -1,36 +1,295 @@
 import numpy as np
+import xarray as xr
+import httpx
 from datetime import datetime, timedelta
-from typing import Dict
+from typing import Dict, Optional
 import logging
+import asyncio
 
 logger = logging.getLogger(__name__)
 
-class MockGFSDataService:
-    """Mock service that generates synthetic temperature anomaly data"""
+class RealGFSDataService:
+    """Service for fetching real high-resolution GFS temperature anomaly data"""
+    
+    def __init__(self):
+        self.base_url = "https://nomads.ncep.noaa.gov/dods/gfs_0p25"
+        self.backup_url = "https://thredds.ucar.edu/thredds/dodsC/grib/NCEP/GFS/Global_0p25deg"
+        
+    async def get_latest_run_time(self) -> datetime:
+        """Get the latest available GFS model run time"""
+        now = datetime.utcnow()
+        # GFS runs at 00, 06, 12, 18 UTC, available ~3.5 hours after run time
+        run_hours = [0, 6, 12, 18]
+        
+        # Check recent runs, accounting for processing delay
+        for hours_back in range(4, 25, 6):  # Start 4 hours back to account for processing time
+            check_time = now - timedelta(hours=hours_back)
+            for run_hour in reversed(run_hours):
+                if check_time.hour >= run_hour:
+                    run_time = check_time.replace(hour=run_hour, minute=0, second=0, microsecond=0)
+                    return run_time
+        
+        # Fallback to previous day's 18Z run
+        yesterday = now - timedelta(days=1)
+        return yesterday.replace(hour=18, minute=0, second=0, microsecond=0)
+    
+    async def fetch_gfs_temperature(self, run_time: datetime, forecast_hour: int = 0) -> Optional[xr.Dataset]:
+        """Fetch real GFS temperature data from NOMADS"""
+        try:
+            date_str = run_time.strftime("%Y%m%d")
+            hour_str = f"{run_time.hour:02d}"
+            
+            # Try primary NOMADS URL first
+            urls_to_try = [
+                f"{self.base_url}/gfs{date_str}/gfs_0p25_{hour_str}z",
+                f"{self.backup_url}/GFS_Global_0p25deg_{date_str}_{hour_str}00.grib2"
+            ]
+            
+            for url in urls_to_try:
+                try:
+                    logger.info(f"Attempting to fetch GFS data from: {url}")
+                    
+                    # Open dataset with timeout
+                    ds = await asyncio.wait_for(
+                        asyncio.to_thread(xr.open_dataset, url, engine='netcdf4'),
+                        timeout=30.0
+                    )
+                    
+                    # Look for temperature variable (different names possible)
+                    temp_vars = ['tmp2m', 'TMP_2maboveground', 'Temperature_height_above_ground', 'tmp']
+                    temp_var = None
+                    
+                    for var in temp_vars:
+                        if var in ds.variables:
+                            temp_var = var
+                            break
+                    
+                    if temp_var is None:
+                        logger.warning(f"No temperature variable found in dataset. Available vars: {list(ds.variables.keys())}")
+                        continue
+                    
+                    # Select forecast time and temperature data
+                    if 'time' in ds.dims:
+                        if len(ds.time) > forecast_hour:
+                            temp_data = ds.isel(time=forecast_hour)[temp_var]
+                        else:
+                            temp_data = ds.isel(time=0)[temp_var]
+                    else:
+                        temp_data = ds[temp_var]
+                    
+                    # Focus on North America bounds for higher resolution
+                    # 15°N to 85°N, 170°W to 50°W
+                    if 'lat' in temp_data.dims and 'lon' in temp_data.dims:
+                        temp_data = temp_data.sel(
+                            lat=slice(85, 15),  # Note: may need to reverse depending on data order
+                            lon=slice(190, 310)  # Convert to 0-360 longitude system
+                        )
+                    elif 'latitude' in temp_data.dims and 'longitude' in temp_data.dims:
+                        temp_data = temp_data.sel(
+                            latitude=slice(85, 15),
+                            longitude=slice(-170, -50)
+                        )
+                    
+                    logger.info(f"Successfully fetched GFS data from {url}")
+                    return temp_data.to_dataset()
+                    
+                except asyncio.TimeoutError:
+                    logger.warning(f"Timeout fetching from {url}")
+                    continue
+                except Exception as e:
+                    logger.warning(f"Failed to fetch from {url}: {e}")
+                    continue
+            
+            logger.error("All GFS data sources failed")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error in fetch_gfs_temperature: {e}")
+            return None
+    
+    def calculate_temperature_anomaly(self, temp_data: xr.Dataset) -> xr.Dataset:
+        """Calculate temperature anomaly from climatology"""
+        try:
+            # Get the temperature variable name
+            temp_var = None
+            for var in ['tmp2m', 'TMP_2maboveground', 'Temperature_height_above_ground', 'tmp']:
+                if var in temp_data.variables:
+                    temp_var = var
+                    break
+            
+            if temp_var is None:
+                raise ValueError("No temperature variable found")
+            
+            temp_values = temp_data[temp_var].values
+            
+            # Get coordinates
+            if 'lat' in temp_data.coords:
+                lats = temp_data['lat'].values
+                lons = temp_data['lon'].values
+            elif 'latitude' in temp_data.coords:
+                lats = temp_data['latitude'].values
+                lons = temp_data['longitude'].values
+            else:
+                raise ValueError("No latitude/longitude coordinates found")
+            
+            # Convert temperature from Kelvin to Celsius if needed
+            if np.mean(temp_values) > 200:  # Likely in Kelvin
+                temp_values = temp_values - 273.15
+            
+            # Create simplified climatology based on latitude (seasonal normals approximation)
+            lat_grid, lon_grid = np.meshgrid(lons, lats)
+            
+            # Seasonal temperature approximation for current time of year
+            now = datetime.utcnow()
+            day_of_year = now.timetuple().tm_yday
+            seasonal_factor = np.cos(2 * np.pi * (day_of_year - 172) / 365.25)  # Peak summer around day 172
+            
+            # Approximate climatology: temperature decreases with latitude, seasonal variation
+            base_temp = 25 - 0.7 * np.abs(lat_grid)  # Base temperature pattern
+            seasonal_temp = base_temp + 10 * seasonal_factor  # Add seasonal variation
+            
+            # Calculate anomaly
+            anomaly = temp_values - seasonal_temp
+            
+            # Create anomaly dataset
+            anomaly_ds = temp_data.copy()
+            anomaly_ds[temp_var] = (temp_data[temp_var].dims, anomaly)
+            
+            return anomaly_ds
+            
+        except Exception as e:
+            logger.error(f"Error calculating temperature anomaly: {e}")
+            raise
     
     async def get_temperature_anomaly_data(self, forecast_hour: int = 0) -> Dict:
-        """Generate mock temperature anomaly data"""
+        """Get real high-resolution temperature anomaly data"""
         try:
-            # Create synthetic data
-            lats = np.linspace(90, -90, 181)  # 1-degree resolution
-            lons = np.linspace(-180, 179, 360)
+            logger.info(f"Fetching real GFS temperature anomaly data for forecast hour {forecast_hour}")
             
-            # Generate realistic-looking temperature anomalies
+            # Get latest model run time
+            run_time = await self.get_latest_run_time()
+            logger.info(f"Using GFS run time: {run_time}")
+            
+            # Fetch real temperature data
+            temp_data = await self.fetch_gfs_temperature(run_time, forecast_hour)
+            
+            if temp_data is None:
+                raise Exception("Failed to fetch GFS temperature data from all sources")
+            
+            # Calculate temperature anomaly
+            anomaly_data = self.calculate_temperature_anomaly(temp_data)
+            
+            # Format for frontend
+            result = self.format_for_frontend(anomaly_data, run_time, forecast_hour)
+            
+            logger.info("Successfully processed real GFS temperature anomaly data")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error getting real GFS data: {e}")
+            # Return error that will trigger fallback to mock data
+            return {"error": str(e)}
+    
+    def format_for_frontend(self, anomaly_data: xr.Dataset, run_time: datetime, forecast_hour: int) -> Dict:
+        """Format real GFS data for frontend consumption"""
+        try:
+            # Get the temperature variable name
+            temp_var = None
+            for var in ['tmp2m', 'TMP_2maboveground', 'Temperature_height_above_ground', 'tmp']:
+                if var in anomaly_data.variables:
+                    temp_var = var
+                    break
+            
+            anomaly_values = anomaly_data[temp_var].values
+            
+            # Get coordinates
+            if 'lat' in anomaly_data.coords:
+                lats = anomaly_data['lat'].values
+                lons = anomaly_data['lon'].values
+            elif 'latitude' in anomaly_data.coords:
+                lats = anomaly_data['latitude'].values
+                lons = anomaly_data['longitude'].values
+            
+            # Convert longitude to -180 to 180 if needed
+            if np.max(lons) > 180:
+                lons = np.where(lons > 180, lons - 360, lons)
+            
+            # Ensure we have valid data
+            valid_data = ~np.isnan(anomaly_values)
+            if not np.any(valid_data):
+                raise ValueError("No valid temperature anomaly data")
+            
+            return {
+                "run_time": run_time.isoformat(),
+                "forecast_hour": forecast_hour,
+                "valid_time": (run_time + timedelta(hours=forecast_hour)).isoformat(),
+                "anomaly_data": {
+                    "lats": lats.tolist(),
+                    "lons": lons.tolist(),
+                    "values": np.nan_to_num(anomaly_values, nan=0.0).tolist()
+                },
+                "statistics": {
+                    "min_anomaly": float(np.nanmin(anomaly_values)),
+                    "max_anomaly": float(np.nanmax(anomaly_values)),
+                    "mean_anomaly": float(np.nanmean(anomaly_values))
+                },
+                "source": "NOAA GFS 0.25°",
+                "resolution": "0.25 degree",
+                "mock_data": False  # This is real data!
+            }
+            
+        except Exception as e:
+            logger.error(f"Error formatting real GFS data: {e}")
+            raise
+
+class MockGFSDataService:
+    """Fallback mock service for when real data is unavailable"""
+    
+    async def get_temperature_anomaly_data(self, forecast_hour: int = 0) -> Dict:
+        """Generate high-quality mock temperature anomaly data focused on North America"""
+        try:
+            logger.info("Using mock GFS data service as fallback")
+            
+            # Higher resolution for North America focus
+            lats = np.linspace(85, 15, 141)  # 0.5-degree resolution for North America
+            lons = np.linspace(-170, -50, 241)
+            
+            # Generate realistic North American temperature patterns
             lon_grid, lat_grid = np.meshgrid(lons, lats)
             
-            # Create some interesting patterns focused on North America
-            anomaly = (
-                3 * np.sin(np.radians(lat_grid) * 2) * np.cos(np.radians(lon_grid) * 3) +
-                2 * np.sin(np.radians(lat_grid) * 3) * np.sin(np.radians(lon_grid) * 2) +
-                np.random.normal(0, 1, lat_grid.shape)
+            # More sophisticated temperature anomaly patterns
+            # Based on typical North American weather patterns
+            base_anomaly = (
+                2 * np.sin(np.radians(lat_grid) * 2) * np.cos(np.radians(lon_grid + 100) * 2) +
+                1.5 * np.sin(np.radians(lat_grid) * 3) * np.sin(np.radians(lon_grid + 90) * 1.5) +
+                np.random.normal(0, 0.8, lat_grid.shape)
             )
             
-            # Add some regional patterns for North America
-            anomaly += 5 * np.exp(-((lat_grid - 45)**2 + (lon_grid - (-100))**2) / 500)  # North America warm spot
-            anomaly -= 3 * np.exp(-((lat_grid - 55)**2 + (lon_grid - (-110))**2) / 400)  # Canada cold spot
-            anomaly += 4 * np.exp(-((lat_grid - 35)**2 + (lon_grid - (-95))**2) / 600)   # Southern US warm spot
+            # Add realistic North American weather features
+            # Pacific Northwest cool pattern
+            pnw_cool = -3 * np.exp(-((lat_grid - 48)**2 + (lon_grid - (-123))**2) / 200)
             
+            # Great Plains warm pattern  
+            plains_warm = 4 * np.exp(-((lat_grid - 40)**2 + (lon_grid - (-100))**2) / 400)
+            
+            # Canadian Arctic cool pattern
+            arctic_cool = -5 * np.exp(-((lat_grid - 70)**2 + (lon_grid - (-110))**2) / 600)
+            
+            # Gulf of Mexico warm pattern
+            gulf_warm = 3 * np.exp(-((lat_grid - 28)**2 + (lon_grid - (-90))**2) / 300)
+            
+            # Rocky Mountain cool pattern
+            rockies_cool = -2 * np.exp(-((lat_grid - 45)**2 + (lon_grid - (-110))**2) / 150)
+            
+            # Combine patterns
+            anomaly = base_anomaly + pnw_cool + plains_warm + arctic_cool + gulf_warm + rockies_cool
+            
+            # Add seasonal variation
             now = datetime.utcnow()
+            day_of_year = now.timetuple().tm_yday
+            seasonal_factor = np.cos(2 * np.pi * (day_of_year - 172) / 365.25)
+            anomaly += seasonal_factor * lat_grid / 30  # Stronger seasonal effect at higher latitudes
+            
             run_time = now.replace(minute=0, second=0, microsecond=0)
             
             return {
@@ -47,8 +306,11 @@ class MockGFSDataService:
                     "max_anomaly": float(np.max(anomaly)),
                     "mean_anomaly": float(np.mean(anomaly))
                 },
+                "source": "Synthetic Data (High-Resolution)",
+                "resolution": "0.5 degree",
                 "mock_data": True
             }
+            
         except Exception as e:
             logger.error(f"Error generating mock data: {e}")
             return {"error": str(e)}
