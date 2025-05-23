@@ -43,8 +43,9 @@ const App = () => {
     const minLat = 15, maxLat = 85;
     const minLon = -170, maxLon = -50;
     
-    for (let i = 0; i < lats.length; i += 2) {  // Higher resolution
-      for (let j = 0; j < lons.length; j += 2) {
+    // Reduced point density for cleaner look
+    for (let i = 0; i < lats.length; i += 8) {
+      for (let j = 0; j < lons.length; j += 8) {
         const lat = lats[i];
         const lon = lons[j];
         
@@ -52,20 +53,42 @@ const App = () => {
         if (lat >= minLat && lat <= maxLat && lon >= minLon && lon <= maxLon) {
           if (values[i] && values[i][j] !== undefined) {
             const normalized = (values[i][j] - min_anomaly) / (max_anomaly - min_anomaly);
-            let color = '#abd9e9';
-            if (normalized < 0.2) color = '#313695';
-            else if (normalized < 0.4) color = '#4575b4';
-            else if (normalized > 0.8) color = '#d73027';
-            else if (normalized > 0.6) color = '#fee090';
+            let color = '#ffffff';
+            let size = 0;
+            
+            // Professional color scheme with appropriate sizing
+            if (normalized < 0.1) {
+              color = '#1a237e';
+              size = 5;
+            } else if (normalized < 0.3) {
+              color = '#3949ab';
+              size = 4;
+            } else if (normalized < 0.4) {
+              color = '#5e35b1';
+              size = 3;
+            } else if (normalized < 0.6) {
+              color = '#90caf9';
+              size = 2;
+            } else if (normalized < 0.7) {
+              color = '#fff176';
+              size = 3;
+            } else if (normalized < 0.9) {
+              color = '#ff9800';
+              size = 4;
+            } else {
+              color = '#d32f2f';
+              size = 5;
+            }
             
             // Map to North America view
-            const x = ((lon - minLon) / (maxLon - minLon)) * 900;
-            const y = ((maxLat - lat) / (maxLat - minLat)) * 600;
+            const x = ((lon - minLon) / (maxLon - minLon)) * 800;
+            const y = ((maxLat - lat) / (maxLat - minLat)) * 500;
             
             points.push({
               x,
               y,
               color,
+              size,
               value: values[i][j],
               lat,
               lon
@@ -83,18 +106,18 @@ const App = () => {
     <div style={{ 
       minHeight: '100vh', 
       background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-      fontFamily: 'Arial, sans-serif'
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
     }}>
       <div style={{
         background: 'rgba(255,255,255,0.95)',
         padding: '2rem',
         boxShadow: '0 2px 20px rgba(0,0,0,0.1)'
       }}>
-        <h1 style={{ margin: 0, color: '#2c3e50', fontSize: '2.5rem' }}>
-          🇺🇸 North America Temperature Anomaly Viewer
+        <h1 style={{ margin: 0, color: '#2c3e50', fontSize: '2.5rem', fontWeight: '300' }}>
+          North America Temperature Anomaly
         </h1>
-        <p style={{ margin: '0.5rem 0 0', color: '#7f8c8d' }}>
-          GFS temperature anomalies for United States, Canada, and Mexico
+        <p style={{ margin: '0.5rem 0 0', color: '#7f8c8d', fontSize: '1.1rem' }}>
+          GFS Model Analysis • High Resolution Temperature Departures
         </p>
       </div>
 
@@ -102,22 +125,35 @@ const App = () => {
         <div style={{ 
           flex: 1, 
           background: 'white', 
-          borderRadius: '12px', 
-          padding: '1.5rem',
-          boxShadow: '0 4px 25px rgba(0,0,0,0.1)'
+          borderRadius: '8px', 
+          padding: '2rem',
+          boxShadow: '0 4px 20px rgba(0,0,0,0.1)'
         }}>
           {data && (
             <div style={{
               textAlign: 'center',
-              marginBottom: '1rem',
-              padding: '0.75rem',
-              background: '#e3f2fd',
-              borderRadius: '8px',
-              fontWeight: '600',
-              color: '#1976d2'
+              marginBottom: '1.5rem',
+              padding: '1rem',
+              background: data.mock_data ? '#fff3e0' : '#e8f5e8',
+              borderRadius: '6px',
+              border: `1px solid ${data.mock_data ? '#ffcc02' : '#4caf50'}`,
+              fontWeight: '500',
+              color: '#333'
             }}>
-              Valid: {new Date(data.valid_time).toLocaleString()}
-              {data.mock_data && <span style={{ marginLeft: '1rem', opacity: 0.7 }}>(Demo Data)</span>}
+              <div style={{ fontSize: '1.1rem', marginBottom: '0.5rem' }}>
+                Valid Time: {new Date(data.valid_time).toLocaleString('en-US', {
+                  weekday: 'short',
+                  year: 'numeric', 
+                  month: 'short', 
+                  day: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  timeZoneName: 'short'
+                })}
+              </div>
+              <div style={{ fontSize: '0.9rem', opacity: 0.8 }}>
+                {data.mock_data ? 'Demonstration Data' : 'Live GFS Data'} • Forecast: +{forecastHour}h
+              </div>
             </div>
           )}
 
@@ -126,142 +162,149 @@ const App = () => {
               display: 'flex', 
               flexDirection: 'column', 
               alignItems: 'center', 
-              height: '600px', 
-              justifyContent: 'center' 
+              height: '500px', 
+              justifyContent: 'center',
+              color: '#666'
             }}>
               <div style={{
-                width: '40px',
-                height: '40px',
-                border: '4px solid #e3e3e3',
-                borderTop: '4px solid #667eea',
+                width: '32px',
+                height: '32px',
+                border: '3px solid #f3f3f3',
+                borderTop: '3px solid #667eea',
                 borderRadius: '50%',
                 animation: 'spin 1s linear infinite'
               }}></div>
-              <p>Loading North America temperature data...</p>
+              <p style={{ marginTop: '1rem', fontSize: '0.9rem' }}>Loading temperature analysis...</p>
             </div>
           )}
 
           {error && (
             <div style={{ 
-              background: '#fee', 
-              color: '#c33', 
+              background: '#ffebee', 
+              color: '#c62828', 
               padding: '1rem', 
-              borderRadius: '8px',
-              borderLeft: '4px solid #c33'
+              borderRadius: '6px',
+              border: '1px solid #ef5350',
+              textAlign: 'center'
             }}>
-              ❌ Error: {error}
+              Unable to load data: {error}
             </div>
           )}
 
           {data && !loading && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
               <div style={{ 
-                border: '2px solid #e1e8ed', 
-                borderRadius: '8px', 
+                border: '1px solid #e0e0e0', 
+                borderRadius: '6px', 
                 overflow: 'hidden',
-                boxShadow: '0 2px 10px rgba(0,0,0,0.1)'
+                background: '#f8f9fa'
               }}>
-                <svg width="900" height="600" viewBox="0 0 900 600">
-                  <rect width="900" height="600" fill="#f0f8ff" stroke="#ccc" />
+                <svg width="800" height="500" viewBox="0 0 800 500" style={{ display: 'block' }}>
+                  <rect width="800" height="500" fill="#f8f9fa"/>
                   
-                  {/* Grid lines */}
-                  <defs>
-                    <pattern id="grid" width="90" height="60" patternUnits="userSpaceOnUse">
-                      <path d="M 90 0 L 0 0 0 60" fill="none" stroke="#e0e0e0" strokeWidth="0.5"/>
-                    </pattern>
-                  </defs>
-                  <rect width="900" height="600" fill="url(#grid)" />
+                  <g stroke="#666" strokeWidth="1.5" fill="none">
+                    <path d="M 120 280 Q 100 270 90 250 Q 85 230 95 210 Q 110 190 140 180 Q 180 170 220 175 Q 280 180 340 185 Q 400 190 460 195 Q 520 200 580 205 Q 640 210 690 220 Q 730 230 750 250 Q 760 270 755 290 Q 750 310 730 325 Q 700 340 660 345 Q 620 350 580 345 Q 540 340 500 335 Q 460 330 420 325 Q 380 320 340 315 Q 300 310 260 305 Q 220 300 180 295 Q 140 290 120 280 Z"/>
+                    <path d="M 100 150 Q 80 140 75 120 Q 70 100 85 85 Q 105 70 135 65 Q 180 60 225 65 Q 290 70 355 75 Q 420 80 485 85 Q 550 90 615 95 Q 680 100 735 110 Q 770 120 785 140 Q 790 160 775 180 Q 760 200 735 210 Q 700 220 665 215 Q 630 210 595 205 Q 560 200 525 195 Q 490 190 455 185 Q 420 180 385 175 Q 350 170 315 165 Q 280 160 245 155 Q 210 150 175 145 Q 140 140 115 135 Q 100 130 100 150 Z"/>
+                    <path d="M 200 380 Q 190 370 188 355 Q 186 340 195 325 Q 210 310 235 305 Q 270 300 305 305 Q 340 310 375 315 Q 410 320 445 325 Q 480 330 510 340 Q 535 350 545 370 Q 550 390 535 405 Q 520 420 495 425 Q 470 430 445 425 Q 420 420 395 415 Q 370 410 345 405 Q 320 400 295 395 Q 270 390 245 385 Q 220 380 200 380 Z"/>
+                  </g>
                   
-                  {/* North America Coastlines */}
-                  {/* United States mainland */}
-                  <path d="M 200 350 Q 180 340 170 325 Q 160 310 155 295 Q 150 280 160 265 Q 170 250 185 240 Q 200 230 220 225 Q 250 220 280 225 Q 320 230 360 235 Q 400 240 440 245 Q 480 250 520 255 Q 560 260 600 265 Q 640 270 680 275 Q 720 280 750 290 Q 780 300 800 320 Q 820 340 825 365 Q 830 390 820 415 Q 810 440 790 455 Q 770 470 740 475 Q 710 480 680 485 Q 650 490 620 485 Q 590 480 560 475 Q 530 470 500 465 Q 470 460 440 455 Q 410 450 380 445 Q 350 440 320 435 Q 290 430 260 425 Q 230 420 210 405 Q 200 390 200 375 Z" fill="none" stroke="#2c3e50" strokeWidth="2"/>
+                  <g stroke="#2196F3" strokeWidth="1" fill="rgba(33, 150, 243, 0.1)">
+                    <ellipse cx="550" cy="220" rx="18" ry="12"/>
+                    <ellipse cx="580" cy="230" rx="15" ry="10"/>
+                    <ellipse cx="520" cy="235" rx="12" ry="8"/>
+                    <ellipse cx="490" cy="245" rx="10" ry="6"/>
+                    <ellipse cx="605" cy="225" rx="8" ry="5"/>
+                  </g>
                   
-                  {/* Canada mainland */}
-                  <path d="M 150 180 Q 130 170 120 155 Q 110 140 115 125 Q 120 110 135 100 Q 150 90 170 85 Q 200 80 230 85 Q 270 90 310 95 Q 350 100 390 105 Q 430 110 470 115 Q 510 120 550 125 Q 590 130 630 135 Q 670 140 710 145 Q 750 150 780 160 Q 810 170 830 185 Q 850 200 860 220 Q 870 240 860 260 Q 850 280 830 295 Q 810 310 780 315 Q 750 320 720 315 Q 690 310 660 305 Q 630 300 600 295 Q 570 290 540 285 Q 510 280 480 275 Q 450 270 420 265 Q 390 260 360 255 Q 330 250 300 245 Q 270 240 240 235 Q 210 230 180 225 Q 150 220 140 200 Q 135 185 150 180 Z" fill="none" stroke="#2c3e50" strokeWidth="2"/>
+                  <ellipse cx="450" cy="120" rx="25" ry="35" stroke="#2196F3" strokeWidth="1" fill="rgba(33, 150, 243, 0.1)"/>
                   
-                  {/* Mexico */}
-                  <path d="M 280 460 Q 270 450 265 435 Q 260 420 270 405 Q 280 390 300 385 Q 320 380 340 385 Q 360 390 380 395 Q 400 400 420 405 Q 440 410 460 415 Q 480 420 500 425 Q 520 430 535 440 Q 550 450 560 465 Q 570 480 565 495 Q 560 510 545 520 Q 530 530 510 535 Q 490 540 470 535 Q 450 530 430 525 Q 410 520 390 515 Q 370 510 350 505 Q 330 500 310 495 Q 290 490 280 475 Q 275 465 280 460 Z" fill="none" stroke="#2c3e50" strokeWidth="2"/>
-                  
-                  {/* Great Lakes */}
-                  <ellipse cx="650" cy="280" rx="25" ry="15" fill="none" stroke="#4682b4" strokeWidth="1.5"/>
-                  <ellipse cx="620" cy="290" rx="20" ry="12" fill="none" stroke="#4682b4" strokeWidth="1.5"/>
-                  <ellipse cx="680" cy="275" rx="15" ry="10" fill="none" stroke="#4682b4" strokeWidth="1.5"/>
-                  <ellipse cx="590" cy="300" rx="12" ry="8" fill="none" stroke="#4682b4" strokeWidth="1.5"/>
-                  <ellipse cx="560" cy="310" rx="10" ry="6" fill="none" stroke="#4682b4" strokeWidth="1.5"/>
-                  
-                  {/* Hudson Bay */}
-                  <ellipse cx="550" cy="180" rx="30" ry="40" fill="none" stroke="#4682b4" strokeWidth="1.5"/>
-                  
-                  {/* Temperature anomaly points */}
                   {points.map((point, i) => (
                     <circle
                       key={i}
                       cx={point.x}
                       cy={point.y}
-                      r="3"
+                      r={point.size}
                       fill={point.color}
-                      opacity="0.7"
+                      stroke="rgba(255,255,255,0.7)"
+                      strokeWidth="0.5"
+                      opacity="0.85"
                     />
                   ))}
                   
-                  {/* Country labels */}
-                  <text x="550" y="170" fontSize="16" fontWeight="700" fill="#2c3e50" textAnchor="middle">CANADA</text>
-                  <text x="500" y="340" fontSize="16" fontWeight="700" fill="#2c3e50" textAnchor="middle">UNITED STATES</text>
-                  <text x="420" y="480" fontSize="16" fontWeight="700" fill="#2c3e50" textAnchor="middle">MEXICO</text>
+                  <text x="450" y="130" fontSize="14" fontWeight="600" fill="#444" textAnchor="middle" fontFamily="system-ui">CANADA</text>
+                  <text x="420" y="270" fontSize="14" fontWeight="600" fill="#444" textAnchor="middle" fontFamily="system-ui">UNITED STATES</text>
+                  <text x="350" y="380" fontSize="14" fontWeight="600" fill="#444" textAnchor="middle" fontFamily="system-ui">MEXICO</text>
                   
-                  {/* Major cities */}
-                  <circle cx="180" cy="220" r="3" fill="#d32f2f" stroke="white" strokeWidth="1"/>
-                  <text x="190" y="225" fontSize="11" fill="#d32f2f" fontWeight="600">Vancouver</text>
+                  <g stroke="white" strokeWidth="1" fill="#1976d2">
+                    <circle cx="130" cy="190" r="2"/>
+                    <circle cx="380" cy="220" r="2"/>
+                    <circle cx="600" cy="240" r="2"/>
+                    <circle cx="250" cy="340" r="2"/>
+                    <circle cx="560" cy="310" r="2"/>
+                    <circle cx="350" cy="410" r="2"/>
+                  </g>
                   
-                  <circle cx="450" cy="260" r="3" fill="#d32f2f" stroke="white" strokeWidth="1"/>
-                  <text x="460" y="265" fontSize="11" fill="#d32f2f" fontWeight="600">Chicago</text>
-                  
-                  <circle cx="720" cy="310" r="3" fill="#d32f2f" stroke="white" strokeWidth="1"/>
-                  <text x="730" y="315" fontSize="11" fill="#d32f2f" fontWeight="600">New York</text>
-                  
-                  <circle cx="320" cy="420" r="3" fill="#d32f2f" stroke="white" strokeWidth="1"/>
-                  <text x="330" y="425" fontSize="11" fill="#d32f2f" fontWeight="600">Los Angeles</text>
-                  
-                  <circle cx="650" cy="380" r="3" fill="#d32f2f" stroke="white" strokeWidth="1"/>
-                  <text x="660" y="385" fontSize="11" fill="#d32f2f" fontWeight="600">Miami</text>
-                  
-                  <circle cx="420" cy="510" r="3" fill="#d32f2f" stroke="white" strokeWidth="1"/>
-                  <text x="430" y="515" fontSize="11" fill="#d32f2f" fontWeight="600">Mexico City</text>
+                  <g fontSize="10" fill="#1976d2" fontFamily="system-ui" fontWeight="500">
+                    <text x="135" y="186">Vancouver</text>
+                    <text x="385" y="216">Chicago</text>
+                    <text x="605" y="236">New York</text>
+                    <text x="255" y="336">Los Angeles</text>
+                    <text x="565" y="306">Miami</text>
+                    <text x="355" y="406">Mexico City</text>
+                  </g>
                 </svg>
               </div>
 
               <div style={{ 
-                marginTop: '1rem', 
-                padding: '1rem', 
-                background: '#f8f9fa', 
-                borderRadius: '8px',
+                marginTop: '1.5rem', 
+                padding: '1.5rem', 
+                background: '#ffffff', 
+                borderRadius: '6px',
+                border: '1px solid #e0e0e0',
                 width: '100%',
-                maxWidth: '900px'
+                maxWidth: '800px'
               }}>
-                <div style={{ fontWeight: '600', marginBottom: '0.5rem' }}>Temperature Anomaly (°C)</div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem' }}>
-                  <span style={{ color: '#313695', fontWeight: '600' }}>Much Colder: {data.statistics.min_anomaly.toFixed(1)}°C</span>
-                  <span style={{ color: '#4575b4' }}>Colder</span>
-                  <span style={{ fontWeight: '600' }}>Normal: 0.0°C</span>
-                  <span style={{ color: '#fee090' }}>Warmer</span>
-                  <span style={{ color: '#d73027', fontWeight: '600' }}>Much Warmer: {data.statistics.max_anomaly.toFixed(1)}°C</span>
+                <div style={{ fontWeight: '600', marginBottom: '1rem', color: '#333', fontSize: '1rem' }}>
+                  Temperature Anomaly Scale (°C)
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <div style={{ width: '12px', height: '12px', backgroundColor: '#1a237e', borderRadius: '50%' }}></div>
+                    <span>Much Colder ({data.statistics.min_anomaly.toFixed(1)}°)</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <div style={{ width: '12px', height: '12px', backgroundColor: '#3949ab', borderRadius: '50%' }}></div>
+                    <span>Colder</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <div style={{ width: '12px', height: '12px', backgroundColor: '#90caf9', borderRadius: '50%' }}></div>
+                    <span>Near Normal</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <div style={{ width: '12px', height: '12px', backgroundColor: '#ff9800', borderRadius: '50%' }}></div>
+                    <span>Warmer</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <div style={{ width: '12px', height: '12px', backgroundColor: '#d32f2f', borderRadius: '50%' }}></div>
+                    <span>Much Warmer ({data.statistics.max_anomaly.toFixed(1)}°)</span>
+                  </div>
                 </div>
               </div>
             </div>
           )}
         </div>
 
-        <div style={{ width: '300px', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+        <div style={{ width: '280px', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
           <div style={{ 
             background: 'white', 
-            borderRadius: '12px', 
+            borderRadius: '8px', 
             padding: '1.5rem',
-            boxShadow: '0 4px 25px rgba(0,0,0,0.1)'
+            boxShadow: '0 2px 10px rgba(0,0,0,0.1)'
           }}>
-            <h3 style={{ margin: '0 0 1rem', color: '#2c3e50' }}>🎛️ Controls</h3>
+            <h3 style={{ margin: '0 0 1rem', color: '#333', fontSize: '1.1rem', fontWeight: '600' }}>Forecast Controls</h3>
             
             <div style={{ marginBottom: '1rem' }}>
-              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500', color: '#555', fontSize: '0.9rem' }}>
                 Forecast Hour:
               </label>
               <select 
@@ -271,12 +314,13 @@ const App = () => {
                 style={{
                   width: '100%',
                   padding: '0.75rem',
-                  border: '2px solid #e1e8ed',
-                  borderRadius: '6px',
-                  fontSize: '1rem'
+                  border: '1px solid #ddd',
+                  borderRadius: '4px',
+                  fontSize: '0.9rem',
+                  background: 'white'
                 }}
               >
-                <option value={0}>Current Analysis</option>
+                <option value={0}>Analysis (Current)</option>
                 <option value={6}>+6 hours</option>
                 <option value={12}>+12 hours</option>
                 <option value={24}>+1 day</option>
@@ -292,45 +336,46 @@ const App = () => {
               style={{
                 width: '100%',
                 padding: '0.75rem',
-                background: loading ? '#ccc' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                color: 'white',
+                background: loading ? '#f5f5f5' : '#1976d2',
+                color: loading ? '#999' : 'white',
                 border: 'none',
-                borderRadius: '6px',
-                fontSize: '1rem',
-                fontWeight: '600',
-                cursor: loading ? 'not-allowed' : 'pointer'
+                borderRadius: '4px',
+                fontSize: '0.9rem',
+                fontWeight: '500',
+                cursor: loading ? 'not-allowed' : 'pointer',
+                transition: 'background-color 0.2s'
               }}
             >
-              {loading ? '🔄 Loading...' : '🔄 Refresh Data'}
+              {loading ? 'Loading...' : 'Refresh Data'}
             </button>
           </div>
 
           {data && (
             <div style={{ 
               background: 'white', 
-              borderRadius: '12px', 
+              borderRadius: '8px', 
               padding: '1.5rem',
-              boxShadow: '0 4px 25px rgba(0,0,0,0.1)'
+              boxShadow: '0 2px 10px rgba(0,0,0,0.1)'
             }}>
-              <h3 style={{ margin: '0 0 1rem', color: '#2c3e50' }}>📊 North America Stats</h3>
+              <h3 style={{ margin: '0 0 1rem', color: '#333', fontSize: '1.1rem', fontWeight: '600' }}>Statistics</h3>
               <div style={{ display: 'grid', gap: '1rem' }}>
-                <div style={{ textAlign: 'center', padding: '1rem', background: '#e8f4fd', borderRadius: '8px', border: '2px solid #2980b9' }}>
-                  <div style={{ fontSize: '1.5rem', fontWeight: '700', color: '#2980b9' }}>
+                <div style={{ textAlign: 'center', padding: '1rem', background: '#e3f2fd', borderRadius: '4px' }}>
+                  <div style={{ fontSize: '1.3rem', fontWeight: '600', color: '#1976d2' }}>
                     {data.statistics.min_anomaly.toFixed(1)}°C
                   </div>
-                  <div style={{ fontSize: '0.9rem', color: '#2980b9', fontWeight: '600' }}>COLDEST SPOT</div>
+                  <div style={{ fontSize: '0.8rem', color: '#666', marginTop: '0.25rem' }}>Coldest Anomaly</div>
                 </div>
-                <div style={{ textAlign: 'center', padding: '1rem', background: '#f8f9fa', borderRadius: '8px' }}>
-                  <div style={{ fontSize: '1.5rem', fontWeight: '700', color: '#95a5a6' }}>
+                <div style={{ textAlign: 'center', padding: '1rem', background: '#f5f5f5', borderRadius: '4px' }}>
+                  <div style={{ fontSize: '1.3rem', fontWeight: '600', color: '#666' }}>
                     {data.statistics.mean_anomaly.toFixed(1)}°C
                   </div>
-                  <div style={{ fontSize: '0.9rem', color: '#7f8c8d' }}>CONTINENTAL AVERAGE</div>
+                  <div style={{ fontSize: '0.8rem', color: '#666', marginTop: '0.25rem' }}>Continental Average</div>
                 </div>
-                <div style={{ textAlign: 'center', padding: '1rem', background: '#fdf2e8', borderRadius: '8px', border: '2px solid #e74c3c' }}>
-                  <div style={{ fontSize: '1.5rem', fontWeight: '700', color: '#e74c3c' }}>
+                <div style={{ textAlign: 'center', padding: '1rem', background: '#ffebee', borderRadius: '4px' }}>
+                  <div style={{ fontSize: '1.3rem', fontWeight: '600', color: '#d32f2f' }}>
                     {data.statistics.max_anomaly.toFixed(1)}°C
                   </div>
-                  <div style={{ fontSize: '0.9rem', color: '#e74c3c', fontWeight: '600' }}>WARMEST SPOT</div>
+                  <div style={{ fontSize: '0.8rem', color: '#666', marginTop: '0.25rem' }}>Warmest Anomaly</div>
                 </div>
               </div>
             </div>
@@ -338,17 +383,17 @@ const App = () => {
 
           <div style={{ 
             background: 'white', 
-            borderRadius: '12px', 
+            borderRadius: '8px', 
             padding: '1.5rem',
-            boxShadow: '0 4px 25px rgba(0,0,0,0.1)'
+            boxShadow: '0 2px 10px rgba(0,0,0,0.1)'
           }}>
-            <h3 style={{ margin: '0 0 1rem', color: '#2c3e50' }}>📋 Map Info</h3>
-            <div style={{ fontSize: '0.9rem', lineHeight: '1.6', color: '#555' }}>
-              <p><strong>Coverage:</strong> North America</p>
-              <p><strong>Countries:</strong> USA, Canada, Mexico</p>
-              <p><strong>Resolution:</strong> GFS 0.25°</p>
-              <p><strong>Update:</strong> Every 6 hours</p>
-              <p><strong>Projection:</strong> Geographic</p>
+            <h3 style={{ margin: '0 0 1rem', color: '#333', fontSize: '1.1rem', fontWeight: '600' }}>Model Info</h3>
+            <div style={{ fontSize: '0.85rem', lineHeight: '1.4', color: '#666' }}>
+              <div style={{ marginBottom: '0.5rem' }}><strong>Model:</strong> GFS 0.25°</div>
+              <div style={{ marginBottom: '0.5rem' }}><strong>Resolution:</strong> ~25 km</div>
+              <div style={{ marginBottom: '0.5rem' }}><strong>Coverage:</strong> North America</div>
+              <div style={{ marginBottom: '0.5rem' }}><strong>Updates:</strong> 4x daily</div>
+              <div><strong>Source:</strong> NOAA/NCEP</div>
             </div>
           </div>
         </div>
@@ -364,7 +409,6 @@ const App = () => {
   );
 };
 
-// Render the App
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(<App />);
 
