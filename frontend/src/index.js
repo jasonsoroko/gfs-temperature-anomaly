@@ -1,19 +1,35 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom/client';
+import * as d3 from 'd3';
+import * as topojson from 'topojson-client';
 
 const App = () => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [forecastHour, setForecastHour] = useState(0);
-  const canvasRef = useRef(null);
+  const [worldData, setWorldData] = useState(null);
+  const svgRef = useRef(null);
+  const tooltipRef = useRef(null);
+
+  // Load world topology data
+  useEffect(() => {
+    fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json')
+      .then(response => response.json())
+      .then(data => {
+        setWorldData(data);
+      })
+      .catch(err => console.error('Error loading world data:', err));
+  }, []);
 
   const fetchData = async (hour = 0) => {
     setLoading(true);
     setError(null);
     
     try {
-      const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/api/v1/temperature/anomaly?forecast_hour=${hour}&use_mock=false`);
+      const response = await fetch(
+        `${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/api/v1/temperature/anomaly?forecast_hour=${hour}&use_mock=false`
+      );
       
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -29,164 +45,230 @@ const App = () => {
   };
 
   useEffect(() => {
-    console.log('App starting, fetching initial data...');
     fetchData(forecastHour);
   }, [forecastHour]);
 
-  // Create temperature heatmap using Canvas
+  // Create D3 visualization
   useEffect(() => {
-    if (!data?.anomaly_data || !canvasRef.current) return;
+    if (!data?.anomaly_data || !worldData || !svgRef.current) return;
 
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
     const { lats, lons, values } = data.anomaly_data;
     const { min_anomaly, max_anomaly } = data.statistics;
 
-    // Set canvas size
-    canvas.width = 900;
-    canvas.height = 600;
+    // Clear previous visualization
+    d3.select(svgRef.current).selectAll("*").remove();
 
-    // Clear canvas
-    ctx.fillStyle = '#f0f8ff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // Set dimensions
+    const width = 1000;
+    const height = 700;
+    const margin = { top: 20, right: 20, bottom: 20, left: 20 };
 
-    // North America bounds
-    const minLat = 15, maxLat = 85;
-    const minLon = -170, maxLon = -50;
+    // Create SVG
+    const svg = d3.select(svgRef.current)
+      .attr('width', width)
+      .attr('height', height)
+      .style('background', '#f0f8ff');
 
-    // Create ImageData for heatmap
-    const imageData = ctx.createImageData(canvas.width, canvas.height);
-    const data_array = imageData.data;
+    // Create projection focused on North America
+    const projection = d3.geoAlbersUsa()
+      .scale(1300)
+      .translate([width / 2, height / 2]);
 
-    // Helper function to get temperature color
-    const getTemperatureColor = (value) => {
-      const normalized = (value - min_anomaly) / (max_anomaly - min_anomaly);
-      let r, g, b;
+    // Alternative projection for full North America including Canada and Mexico
+    const projectionFull = d3.geoAzimuthalEqualArea()
+      .rotate([100, -45])
+      .scale(1100)
+      .translate([width / 2, height / 2])
+      .clipAngle(180 - 1e-3)
+      .precision(1);
 
-      if (normalized < 0.2) {
-        // Cold - blue
-        r = 25; g = 55; b = 126;
-      } else if (normalized < 0.4) {
-        // Cool - light blue
-        r = 57; g = 117; b = 180;
-      } else if (normalized < 0.6) {
-        // Normal - white/light blue
-        r = 144; g = 202; b = 249;
-      } else if (normalized < 0.8) {
-        // Warm - yellow/orange
-        r = 255; g = 152; b = 0;
-      } else {
-        // Hot - red
-        r = 211; g = 47; b = 47;
+    // Use full projection for complete North America view
+    const path = d3.geoPath().projection(projectionFull);
+
+    // Create color scale
+    const colorScale = d3.scaleSequential()
+      .domain([min_anomaly, max_anomaly])
+      .interpolator(d3.interpolateRdBu)
+      .clamp(true);
+
+    // Reverse the color scale so blue is cold and red is hot
+    const reverseColorScale = (value) => colorScale(max_anomaly + min_anomaly - value);
+
+    // Create contour data from grid
+    const contourData = [];
+    for (let i = 0; i < lats.length; i++) {
+      for (let j = 0; j < lons.length; j++) {
+        if (values[i] && values[i][j] !== undefined && !isNaN(values[i][j])) {
+          contourData.push({
+            lat: lats[i],
+            lon: lons[j],
+            value: values[i][j]
+          });
+        }
       }
+    }
 
-      return [r, g, b];
-    };
+    // Create Voronoi diagram for interpolation
+    const voronoi = d3.Delaunay
+      .from(contourData, d => projectionFull([d.lon, d.lat])?.[0] || 0, d => projectionFull([d.lon, d.lat])?.[1] || 0)
+      .voronoi([0, 0, width, height]);
 
-    // Fill the heatmap
-    for (let x = 0; x < canvas.width; x++) {
-      for (let y = 0; y < canvas.height; y++) {
-        // Convert canvas coordinates to lat/lon
-        const lon = minLon + (x / canvas.width) * (maxLon - minLon);
-        const lat = maxLat - (y / canvas.height) * (maxLat - minLat);
+    // Draw temperature anomaly layer
+    const tempLayer = svg.append('g').attr('class', 'temperature-layer');
 
-        // Find nearest data point
-        let closestValue = null;
-        let minDistance = Infinity;
-
-        for (let i = 0; i < lats.length; i++) {
-          for (let j = 0; j < lons.length; j++) {
-            if (values[i] && values[i][j] !== undefined) {
-              const distance = Math.sqrt(
-                Math.pow(lat - lats[i], 2) + Math.pow(lon - lons[j], 2)
-              );
-              if (distance < minDistance) {
-                minDistance = distance;
-                closestValue = values[i][j];
-              }
-            }
+    // Create a finer grid for smoother visualization
+    const gridSize = 5; // pixels
+    for (let x = 0; x < width; x += gridSize) {
+      for (let y = 0; y < height; y += gridSize) {
+        const index = voronoi.delaunay.find(x, y);
+        if (index !== -1 && contourData[index]) {
+          const projected = projectionFull.invert([x, y]);
+          if (projected) {
+            tempLayer.append('rect')
+              .attr('x', x)
+              .attr('y', y)
+              .attr('width', gridSize)
+              .attr('height', gridSize)
+              .attr('fill', reverseColorScale(contourData[index].value))
+              .attr('opacity', 0.8);
           }
         }
-
-        // Set pixel color
-        if (closestValue !== null) {
-          const [r, g, b] = getTemperatureColor(closestValue);
-          const pixelIndex = (y * canvas.width + x) * 4;
-          data_array[pixelIndex] = r;     // Red
-          data_array[pixelIndex + 1] = g; // Green
-          data_array[pixelIndex + 2] = b; // Blue
-          data_array[pixelIndex + 3] = 180; // Alpha (transparency)
-        } else {
-          const pixelIndex = (y * canvas.width + x) * 4;
-          data_array[pixelIndex] = 240;     // Light gray
-          data_array[pixelIndex + 1] = 248;
-          data_array[pixelIndex + 2] = 255;
-          data_array[pixelIndex + 3] = 255;
-        }
       }
     }
 
-    // Put the image data on canvas
-    ctx.putImageData(imageData, 0, 0);
+    // Apply a blur filter for smoother appearance
+    const defs = svg.append('defs');
+    const filter = defs.append('filter')
+      .attr('id', 'blur')
+      .attr('x', '-50%')
+      .attr('y', '-50%')
+      .attr('width', '200%')
+      .attr('height', '200%');
+    filter.append('feGaussianBlur')
+      .attr('in', 'SourceGraphic')
+      .attr('stdDeviation', 2);
 
-    // Draw country outlines on top
-    ctx.strokeStyle = '#333';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
+    tempLayer.style('filter', 'url(#blur)');
 
-    // Simplified North America outline
-    const coords = [
-      // USA outline (simplified)
-      [200, 350], [180, 340], [170, 320], [160, 300], [155, 280], 
-      [160, 260], [180, 240], [220, 230], [280, 225], [360, 235], 
-      [460, 245], [580, 255], [680, 270], [750, 290], [800, 320], 
-      [820, 360], [810, 400], [780, 440], [720, 470], [640, 480], 
-      [540, 470], [440, 450], [340, 430], [240, 410], [200, 380]
-    ];
+    // Draw world map
+    const world = topojson.feature(worldData, worldData.objects.countries);
+    
+    // Create a mask for North America
+    const northAmericaCountries = [840, 124, 484]; // USA, Canada, Mexico country codes
+    
+    svg.append('g')
+      .attr('class', 'countries')
+      .selectAll('path')
+      .data(world.features)
+      .enter()
+      .append('path')
+      .attr('d', path)
+      .attr('fill', 'none')
+      .attr('stroke', d => northAmericaCountries.includes(d.id) ? '#333' : '#999')
+      .attr('stroke-width', d => northAmericaCountries.includes(d.id) ? 1.5 : 0.5)
+      .attr('opacity', d => northAmericaCountries.includes(d.id) ? 1 : 0.3);
 
-    ctx.moveTo(coords[0][0], coords[0][1]);
-    for (let i = 1; i < coords.length; i++) {
-      ctx.lineTo(coords[i][0], coords[i][1]);
-    }
-    ctx.closePath();
-    ctx.stroke();
+    // Add graticule (grid lines)
+    const graticule = d3.geoGraticule()
+      .step([10, 10]);
+    
+    svg.append('path')
+      .datum(graticule)
+      .attr('class', 'graticule')
+      .attr('d', path)
+      .attr('fill', 'none')
+      .attr('stroke', '#ddd')
+      .attr('stroke-width', 0.5)
+      .attr('opacity', 0.5);
 
     // Add major cities
-    ctx.fillStyle = '#1976d2';
-    ctx.strokeStyle = 'white';
-    ctx.lineWidth = 2;
-
     const cities = [
-      { name: 'Vancouver', x: 130, y: 190 },
-      { name: 'Chicago', x: 380, y: 220 },
-      { name: 'New York', x: 600, y: 240 },
-      { name: 'Los Angeles', x: 250, y: 340 },
-      { name: 'Miami', x: 560, y: 310 },
-      { name: 'Mexico City', x: 350, y: 410 }
+      { name: 'New York', coords: [-74.006, 40.7128] },
+      { name: 'Los Angeles', coords: [-118.2437, 34.0522] },
+      { name: 'Chicago', coords: [-87.6298, 41.8781] },
+      { name: 'Toronto', coords: [-79.3832, 43.6532] },
+      { name: 'Mexico City', coords: [-99.1332, 19.4326] },
+      { name: 'Vancouver', coords: [-123.1207, 49.2827] },
+      { name: 'Montreal', coords: [-73.5673, 45.5017] },
+      { name: 'Miami', coords: [-80.1918, 25.7617] },
+      { name: 'Denver', coords: [-104.9903, 39.7392] },
+      { name: 'Seattle', coords: [-122.3321, 47.6062] }
     ];
 
-    cities.forEach(city => {
-      ctx.beginPath();
-      ctx.arc(city.x, city.y, 4, 0, 2 * Math.PI);
-      ctx.fill();
-      ctx.stroke();
+    const cityGroup = svg.append('g').attr('class', 'cities');
 
-      // City labels
-      ctx.fillStyle = '#1976d2';
-      ctx.font = '12px system-ui';
-      ctx.fontWeight = '600';
-      ctx.fillText(city.name, city.x + 8, city.y + 4);
+    cities.forEach(city => {
+      const projected = projectionFull(city.coords);
+      if (projected) {
+        // City dot
+        cityGroup.append('circle')
+          .attr('cx', projected[0])
+          .attr('cy', projected[1])
+          .attr('r', 3)
+          .attr('fill', '#fff')
+          .attr('stroke', '#333')
+          .attr('stroke-width', 1.5);
+
+        // City label
+        cityGroup.append('text')
+          .attr('x', projected[0])
+          .attr('y', projected[1])
+          .attr('dx', 5)
+          .attr('dy', -5)
+          .attr('font-size', '11px')
+          .attr('font-weight', '500')
+          .attr('fill', '#333')
+          .attr('stroke', 'white')
+          .attr('stroke-width', 3)
+          .attr('paint-order', 'stroke')
+          .text(city.name);
+      }
     });
 
-    // Add country labels
-    ctx.fillStyle = '#333';
-    ctx.font = 'bold 16px system-ui';
-    ctx.textAlign = 'center';
-    ctx.fillText('CANADA', 450, 130);
-    ctx.fillText('UNITED STATES', 420, 270);
-    ctx.fillText('MEXICO', 350, 380);
+    // Add interactive tooltip
+    const tooltip = d3.select(tooltipRef.current);
 
-  }, [data]);
+    svg.on('mousemove', (event) => {
+      const [x, y] = d3.pointer(event);
+      const coords = projectionFull.invert([x, y]);
+      
+      if (coords) {
+        const [lon, lat] = coords;
+        
+        // Find nearest data point
+        let nearestValue = null;
+        let minDistance = Infinity;
+        
+        contourData.forEach(point => {
+          const distance = Math.sqrt(
+            Math.pow(lat - point.lat, 2) + Math.pow(lon - point.lon, 2)
+          );
+          if (distance < minDistance && distance < 2) { // Within 2 degrees
+            minDistance = distance;
+            nearestValue = point.value;
+          }
+        });
+        
+        if (nearestValue !== null) {
+          tooltip
+            .style('display', 'block')
+            .style('left', (event.pageX + 10) + 'px')
+            .style('top', (event.pageY - 10) + 'px')
+            .html(`
+              <strong>Location:</strong> ${lat.toFixed(1)}°N, ${Math.abs(lon).toFixed(1)}°W<br/>
+              <strong>Anomaly:</strong> ${nearestValue > 0 ? '+' : ''}${nearestValue.toFixed(1)}°C
+            `);
+        } else {
+          tooltip.style('display', 'none');
+        }
+      }
+    });
+
+    svg.on('mouseout', () => {
+      tooltip.style('display', 'none');
+    });
+
+  }, [data, worldData]);
 
   return (
     <div style={{ 
@@ -203,7 +285,7 @@ const App = () => {
           North America Temperature Anomaly
         </h1>
         <p style={{ margin: '0.5rem 0 0', color: '#7f8c8d', fontSize: '1.1rem' }}>
-          High Resolution Heatmap • GFS Model Analysis
+          High Resolution GFS Model Analysis • D3.js Visualization
         </p>
       </div>
 
@@ -213,7 +295,8 @@ const App = () => {
           background: 'white', 
           borderRadius: '8px', 
           padding: '2rem',
-          boxShadow: '0 4px 20px rgba(0,0,0,0.1)'
+          boxShadow: '0 4px 20px rgba(0,0,0,0.1)',
+          position: 'relative'
         }}>
           {data && (
             <div style={{
@@ -238,7 +321,8 @@ const App = () => {
                 })}
               </div>
               <div style={{ fontSize: '0.9rem', opacity: 0.8 }}>
-                {data.mock_data ? 'High-Resolution Demonstration Data' : 'Live GFS Data'} • Forecast: +{forecastHour}h
+                {data.mock_data ? 'High-Resolution Demonstration Data' : 'Live GFS Data'} • 
+                Resolution: {data.resolution} • Forecast: +{forecastHour}h
               </div>
             </div>
           )}
@@ -248,19 +332,19 @@ const App = () => {
               display: 'flex', 
               flexDirection: 'column', 
               alignItems: 'center', 
-              height: '600px', 
+              height: '700px', 
               justifyContent: 'center',
               color: '#666'
             }}>
               <div style={{
-                width: '32px',
-                height: '32px',
-                border: '3px solid #f3f3f3',
-                borderTop: '3px solid #667eea',
+                width: '48px',
+                height: '48px',
+                border: '4px solid #f3f3f3',
+                borderTop: '4px solid #667eea',
                 borderRadius: '50%',
                 animation: 'spin 1s linear infinite'
               }}></div>
-              <p style={{ marginTop: '1rem', fontSize: '0.9rem' }}>Loading high-resolution temperature data...</p>
+              <p style={{ marginTop: '1rem', fontSize: '1rem' }}>Loading high-resolution temperature data...</p>
             </div>
           )}
 
@@ -279,23 +363,13 @@ const App = () => {
 
           {data && !loading && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-              <div style={{ 
+              <svg ref={svgRef} style={{ 
                 border: '1px solid #e0e0e0', 
-                borderRadius: '6px', 
-                overflow: 'hidden',
-                background: '#f8f9fa'
-              }}>
-                <canvas 
-                  ref={canvasRef}
-                  style={{ 
-                    display: 'block',
-                    width: '900px',
-                    height: '600px'
-                  }}
-                />
-              </div>
+                borderRadius: '6px',
+                background: '#f0f8ff'
+              }}></svg>
 
-              {/* Professional legend */}
+              {/* Temperature scale legend */}
               <div style={{ 
                 marginTop: '1.5rem', 
                 padding: '1.5rem', 
@@ -303,38 +377,40 @@ const App = () => {
                 borderRadius: '6px',
                 border: '1px solid #e0e0e0',
                 width: '100%',
-                maxWidth: '900px'
+                maxWidth: '1000px'
               }}>
                 <div style={{ fontWeight: '600', marginBottom: '1rem', color: '#333', fontSize: '1rem' }}>
                   Temperature Anomaly Scale (°C)
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <div style={{ width: '20px', height: '12px', background: 'linear-gradient(to right, #19377F, #3949ab)', borderRadius: '2px' }}></div>
-                    <span>Much Colder ({data.statistics.min_anomaly.toFixed(1)}°)</span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <div style={{ width: '20px', height: '12px', backgroundColor: '#90caf9', borderRadius: '2px' }}></div>
-                    <span>Near Normal</span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <div style={{ width: '20px', height: '12px', background: 'linear-gradient(to right, #ff9800, #d32f2f)', borderRadius: '2px' }}></div>
-                    <span>Much Warmer ({data.statistics.max_anomaly.toFixed(1)}°)</span>
-                  </div>
+                <div style={{ 
+                  height: '30px', 
+                  background: `linear-gradient(to right, 
+                    #053061 0%, #2166ac 10%, #4393c3 20%, #92c5de 30%, #d1e5f0 40%, 
+                    #f7f7f7 50%, 
+                    #fddbc7 60%, #f4a582 70%, #d6604d 80%, #b2182b 90%, #67001f 100%)`,
+                  borderRadius: '4px',
+                  marginBottom: '0.5rem'
+                }}></div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', color: '#666' }}>
+                  <span>{data.statistics.min_anomaly.toFixed(1)}°C</span>
+                  <span>0°C</span>
+                  <span>+{data.statistics.max_anomaly.toFixed(1)}°C</span>
                 </div>
               </div>
             </div>
           )}
         </div>
 
-        <div style={{ width: '280px', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+        <div style={{ width: '320px', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
           <div style={{ 
             background: 'white', 
             borderRadius: '8px', 
             padding: '1.5rem',
             boxShadow: '0 2px 10px rgba(0,0,0,0.1)'
           }}>
-            <h3 style={{ margin: '0 0 1rem', color: '#333', fontSize: '1.1rem', fontWeight: '600' }}>Forecast Controls</h3>
+            <h3 style={{ margin: '0 0 1rem', color: '#333', fontSize: '1.1rem', fontWeight: '600' }}>
+              Forecast Controls
+            </h3>
             
             <div style={{ marginBottom: '1rem' }}>
               <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500', color: '#555', fontSize: '0.9rem' }}>
@@ -359,7 +435,12 @@ const App = () => {
                 <option value={24}>+1 day</option>
                 <option value={48}>+2 days</option>
                 <option value={72}>+3 days</option>
+                <option value={96}>+4 days</option>
                 <option value={120}>+5 days</option>
+                <option value={144}>+6 days</option>
+                <option value={168}>+7 days</option>
+                <option value={240}>+10 days</option>
+                <option value={384}>+16 days</option>
               </select>
             </div>
 
@@ -369,14 +450,14 @@ const App = () => {
               style={{
                 width: '100%',
                 padding: '0.75rem',
-                background: loading ? '#f5f5f5' : '#1976d2',
+                background: loading ? '#f5f5f5' : '#667eea',
                 color: loading ? '#999' : 'white',
                 border: 'none',
                 borderRadius: '4px',
                 fontSize: '0.9rem',
                 fontWeight: '500',
                 cursor: loading ? 'not-allowed' : 'pointer',
-                transition: 'background-color 0.2s'
+                transition: 'all 0.2s'
               }}
             >
               {loading ? 'Loading...' : 'Refresh Data'}
@@ -390,25 +471,50 @@ const App = () => {
               padding: '1.5rem',
               boxShadow: '0 2px 10px rgba(0,0,0,0.1)'
             }}>
-              <h3 style={{ margin: '0 0 1rem', color: '#333', fontSize: '1.1rem', fontWeight: '600' }}>Statistics</h3>
+              <h3 style={{ margin: '0 0 1rem', color: '#333', fontSize: '1.1rem', fontWeight: '600' }}>
+                Statistics
+              </h3>
               <div style={{ display: 'grid', gap: '1rem' }}>
-                <div style={{ textAlign: 'center', padding: '1rem', background: '#e3f2fd', borderRadius: '4px' }}>
-                  <div style={{ fontSize: '1.3rem', fontWeight: '600', color: '#1976d2' }}>
+                <div style={{ 
+                  textAlign: 'center', 
+                  padding: '1rem', 
+                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', 
+                  borderRadius: '6px',
+                  color: 'white'
+                }}>
+                  <div style={{ fontSize: '1.4rem', fontWeight: '600' }}>
                     {data.statistics.min_anomaly.toFixed(1)}°C
                   </div>
-                  <div style={{ fontSize: '0.8rem', color: '#666', marginTop: '0.25rem' }}>Coldest Anomaly</div>
+                  <div style={{ fontSize: '0.8rem', marginTop: '0.25rem', opacity: 0.9 }}>
+                    Coldest Anomaly
+                  </div>
                 </div>
-                <div style={{ textAlign: 'center', padding: '1rem', background: '#f5f5f5', borderRadius: '4px' }}>
-                  <div style={{ fontSize: '1.3rem', fontWeight: '600', color: '#666' }}>
+                <div style={{ 
+                  textAlign: 'center', 
+                  padding: '1rem', 
+                  background: '#f5f5f5', 
+                  borderRadius: '6px' 
+                }}>
+                  <div style={{ fontSize: '1.4rem', fontWeight: '600', color: '#666' }}>
                     {data.statistics.mean_anomaly.toFixed(1)}°C
                   </div>
-                  <div style={{ fontSize: '0.8rem', color: '#666', marginTop: '0.25rem' }}>Continental Average</div>
-                </div>
-                <div style={{ textAlign: 'center', padding: '1rem', background: '#ffebee', borderRadius: '4px' }}>
-                  <div style={{ fontSize: '1.3rem', fontWeight: '600', color: '#d32f2f' }}>
-                    {data.statistics.max_anomaly.toFixed(1)}°C
+                  <div style={{ fontSize: '0.8rem', color: '#888', marginTop: '0.25rem' }}>
+                    Continental Average
                   </div>
-                  <div style={{ fontSize: '0.8rem', color: '#666', marginTop: '0.25rem' }}>Warmest Anomaly</div>
+                </div>
+                <div style={{ 
+                  textAlign: 'center', 
+                  padding: '1rem', 
+                  background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)', 
+                  borderRadius: '6px',
+                  color: 'white'
+                }}>
+                  <div style={{ fontSize: '1.4rem', fontWeight: '600' }}>
+                    +{data.statistics.max_anomaly.toFixed(1)}°C
+                  </div>
+                  <div style={{ fontSize: '0.8rem', marginTop: '0.25rem', opacity: 0.9 }}>
+                    Warmest Anomaly
+                  </div>
                 </div>
               </div>
             </div>
@@ -420,17 +526,56 @@ const App = () => {
             padding: '1.5rem',
             boxShadow: '0 2px 10px rgba(0,0,0,0.1)'
           }}>
-            <h3 style={{ margin: '0 0 1rem', color: '#333', fontSize: '1.1rem', fontWeight: '600' }}>Heatmap Info</h3>
-            <div style={{ fontSize: '0.85rem', lineHeight: '1.4', color: '#666' }}>
-              <div style={{ marginBottom: '0.5rem' }}><strong>Type:</strong> Continuous Field</div>
-              <div style={{ marginBottom: '0.5rem' }}><strong>Resolution:</strong> Full GFS Grid</div>
-              <div style={{ marginBottom: '0.5rem' }}><strong>Interpolation:</strong> Nearest Neighbor</div>
-              <div style={{ marginBottom: '0.5rem' }}><strong>Coverage:</strong> North America</div>
-              <div><strong>Source:</strong> NOAA/NCEP GFS</div>
+            <h3 style={{ margin: '0 0 1rem', color: '#333', fontSize: '1.1rem', fontWeight: '600' }}>
+              Map Information
+            </h3>
+            <div style={{ fontSize: '0.85rem', lineHeight: '1.6', color: '#666' }}>
+              <div style={{ marginBottom: '0.75rem' }}>
+                <strong style={{ color: '#444' }}>Projection:</strong> Azimuthal Equal-Area
+              </div>
+              <div style={{ marginBottom: '0.75rem' }}>
+                <strong style={{ color: '#444' }}>Coverage:</strong> North America (15°N - 85°N)
+              </div>
+              <div style={{ marginBottom: '0.75rem' }}>
+                <strong style={{ color: '#444' }}>Data Source:</strong> {data?.source || 'NOAA GFS'}
+              </div>
+              <div style={{ marginBottom: '0.75rem' }}>
+                <strong style={{ color: '#444' }}>Grid Resolution:</strong> {data?.resolution || '0.25°'}
+              </div>
+              <div>
+                <strong style={{ color: '#444' }}>Update Cycle:</strong> Every 6 hours
+              </div>
+            </div>
+          </div>
+
+          <div style={{ 
+            background: '#f0f7ff', 
+            borderRadius: '8px', 
+            padding: '1rem',
+            border: '1px solid #90caf9'
+          }}>
+            <div style={{ fontSize: '0.85rem', color: '#1976d2' }}>
+              <strong>💡 Tip:</strong> Hover over the map to see temperature anomaly values at specific locations.
             </div>
           </div>
         </div>
       </div>
+
+      {/* Tooltip */}
+      <div 
+        ref={tooltipRef}
+        style={{
+          position: 'absolute',
+          display: 'none',
+          background: 'rgba(0, 0, 0, 0.85)',
+          color: 'white',
+          padding: '8px 12px',
+          borderRadius: '4px',
+          fontSize: '0.85rem',
+          pointerEvents: 'none',
+          zIndex: 1000
+        }}
+      ></div>
 
       <style>{`
         @keyframes spin {
