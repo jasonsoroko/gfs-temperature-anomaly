@@ -1,0 +1,11 @@
+.env
+.env.local
+secrets/
+__pycache__/
+*.pyc
+node_modules/
+.venv/
+frontend/build/
+*.log
+.DS_Store
+docker-compose.override.yml
