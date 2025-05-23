@@ -3,7 +3,9 @@ import ReactDOM from 'react-dom/client';
 import * as d3 from 'd3';
 import * as topojson from 'topojson-client';
 
+
 const App = () => {
+  console.log("App component rendering!");
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -31,11 +33,13 @@ const App = () => {
         `${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/api/v1/temperature/anomaly?forecast_hour=${hour}&use_mock=false`
       );
       
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
+   // Comment out or remove these lines:
+    // if (!response.ok) {
+    //   throw new Error(`HTTP error! status: ${response.status}`);
+    // }
       
       const result = await response.json();
+      console.log('Fetched data:', result); // DEBUG
       setData(result);
     } catch (err) {
       setError(err.message);
@@ -50,31 +54,111 @@ const App = () => {
 
   // Create D3 visualization
   useEffect(() => {
-    if (!data?.anomaly_data || !worldData || !svgRef.current) return;
+    console.log("DEBUG: useEffect trigger", {
+      hasData: !!data,
+      hasAnomaly: !!data?.anomaly_data,
+      hasWorldData: !!worldData,
+      hasSVG: !!svgRef.current
+    });
+    if (!data?.anomaly_data || !worldData || !svgRef.current) {
+      console.log("DEBUG: Not rendering, missing dependency", {
+        data,
+        anomaly_data: data?.anomaly_data,
+        worldData,
+        svg: svgRef.current
+      });
+      return;
+    }
 
     const { lats, lons, values } = data.anomaly_data;
     const { min_anomaly, max_anomaly } = data.statistics;
 
+    // DEBUG: Log data structure
+    console.log('=== VISUALIZATION DEBUG ===');
+    console.log('Data structure:', {
+      latsLength: lats.length,
+      lonsLength: lons.length,
+      valuesLength: values.length,
+      firstLat: lats[0],
+      lastLat: lats[lats.length - 1],
+      firstLon: lons[0],
+      lastLon: lons[lons.length - 1],
+      sampleValue: values[0]?.[0]
+    });
+
     // Clear previous visualization
     d3.select(svgRef.current).selectAll("*").remove();
 
-    // Set dimensions
+    // --- BEGIN: SVG TEST SHAPES ---
     const width = 1000;
     const height = 700;
-
-    // Create SVG
     const svg = d3.select(svgRef.current)
       .attr('width', width)
       .attr('height', height)
       .style('background', '#f0f8ff');
 
-    // Create projection focused on North America
-    const projection = d3.geoAzimuthalEqualArea()
-      .rotate([100, -45])
-      .scale(1100)
-      .translate([width / 2, height / 2])
-      .clipAngle(180 - 1e-3)
-      .precision(1);
+    // Draw a huge blue circle at SVG center
+    svg.append('circle')
+      .attr('cx', width / 2)
+      .attr('cy', height / 2)
+      .attr('r', 80)
+      .attr('fill', 'blue')
+      .attr('opacity', 0.7);
+
+    // Draw a red rectangle in upper left
+    svg.append('rect')
+      .attr('x', 0)
+      .attr('y', 0)
+      .attr('width', 200)
+      .attr('height', 80)
+      .attr('fill', 'red')
+      .attr('opacity', 0.5);
+
+    // Write 'SVG TEST' in the center
+    svg.append('text')
+      .attr('x', width / 2)
+      .attr('y', height / 2)
+      .attr('text-anchor', 'middle')
+      .attr('font-size', '40px')
+      .attr('fill', 'white')
+      .attr('font-weight', 'bold')
+      .text('SVG TEST');
+    // --- END: SVG TEST SHAPES ---
+
+// Create projection focused on North America
+const projection = d3.geoAzimuthalEqualArea()
+  .rotate([100, -45])
+  .scale(600)
+  .translate([width / 2, height / 2])
+  .clipAngle(180 - 1e-3)
+  .precision(1);
+
+// --- PLACE THIS BLOCK HERE ---
+const cochraneCoords = projection([-81.0177, 49.7859]);
+console.log('Placing debug circle at:', cochraneCoords);
+if (cochraneCoords) {
+  svg.append('circle')
+    .attr('cx', cochraneCoords[0])
+    .attr('cy', cochraneCoords[1])
+    .attr('r', 40)
+    .attr('fill', 'red')
+    .attr('opacity', 0.5);
+  svg.append('text')
+    .attr('x', cochraneCoords[0])
+    .attr('y', cochraneCoords[1] + 55)
+    .attr('font-size', '20px')
+    .attr('fill', 'red')
+    .attr('text-anchor', 'middle')
+    .text('Cochrane ON');
+}
+
+
+
+    // DEBUG: Test projection
+    console.log('Testing projection:');
+    console.log('New York [-74, 40.7]:', projection([-74, 40.7]));
+    console.log('Los Angeles [-118.2, 34]:', projection([-118.2, 34]));
+    console.log('Center of data:', projection([(lons[0] + lons[lons.length-1])/2, (lats[0] + lats[lats.length-1])/2]));
 
     const path = d3.geoPath().projection(projection);
 
@@ -102,26 +186,47 @@ const App = () => {
     // Create a group for temperature data
     const tempGroup = svg.append('g').attr('class', 'temperature-data');
 
+    // Debug: show sample longitude fix before circle-drawing loop
+    console.log('Sample lon before/after fix:', lons[0], lons[0] > 180 ? lons[0] - 360 : lons[0]);
+
     // Draw temperature data as circles
-    const latStep = lats[0] - lats[1]; // Assuming uniform spacing
-    const lonStep = lons[1] - lons[0];
-    
-    for (let i = 0; i < lats.length; i++) {
-      for (let j = 0; j < lons.length; j++) {
+    let successfulPoints = 0;
+    let failedPoints = 0;
+
+    for (let i = 0; i < lats.length; i += 5) { // Sample every 5th point for performance
+      for (let j = 0; j < lons.length; j += 5) {
         if (values[i] && values[i][j] !== undefined && !isNaN(values[i][j])) {
-          const coords = projection([lons[j], lats[i]]);
+          // Convert 0–360° lon → -180…180° expected by the projection
+          const lonFixed = lons[j] > 180 ? lons[j] - 360 : lons[j];
+          const coords = projection([lonFixed, lats[i]]);
+          
+          // DEBUG: Log first few projections
+          if (successfulPoints < 5) {
+            console.log(`Point ${i},${j}: [${lons[j]}, ${lats[i]}] (fixed: ${lonFixed}) -> ${coords ? `[${coords[0]?.toFixed(1)}, ${coords[1]?.toFixed(1)}]` : 'null'}`);
+          }
+
           if (coords) {
             tempGroup.append('circle')
               .attr('cx', coords[0])
               .attr('cy', coords[1])
-              .attr('r', 10)
+              .attr('r', 6) // slightly smaller radius
               .attr('fill', colorScale(values[i][j]))
-              .attr('fill-opacity', 0.9)
-              .attr('stroke', 'none');
+              .attr('fill-opacity', 0.75)
+              .attr('stroke', '#222')
+              .attr('stroke-width', 0.4);
+            successfulPoints++;
+          } else {
+            failedPoints++;
           }
         }
       }
     }
+
+    console.log('Visualization results:', {
+      successfulPoints,
+      failedPoints,
+      totalCircles: document.querySelectorAll('.temperature-data circle').length
+    });
 
     // Add graticule (grid lines)
     const graticule = d3.geoGraticule()
@@ -180,48 +285,46 @@ const App = () => {
       }
     });
 
-    // Add interactive tooltip
-    const tooltip = d3.select(tooltipRef.current);
+    // Add simple test rectangle to verify SVG is working
+    svg.append('rect')
+      .attr('x', 10)
+      .attr('y', 10)
+      .attr('width', 100)
+      .attr('height', 20)
+      .attr('fill', 'red')
+      .attr('opacity', 0.5);
+    
+    svg.append('text')
+      .attr('x', 15)
+      .attr('y', 25)
+      .attr('fill', 'white')
+      .attr('font-size', '12px')
+      .text('DEBUG: SVG Working');
 
-    tempGroup.selectAll('circle')
-      .on('mouseover', function(event, d) {
-        const circle = d3.select(this);
-        const cx = +circle.attr('cx');
-        const cy = +circle.attr('cy');
-        const fill = circle.attr('fill');
-        
-        // Find the data point
-        const coords = projection.invert([cx, cy]);
-        if (coords) {
-          // Find closest data point
-          let closestValue = null;
-          let minDist = Infinity;
-          
-          for (let i = 0; i < lats.length; i++) {
-            for (let j = 0; j < lons.length; j++) {
-              const dist = Math.abs(lats[i] - coords[1]) + Math.abs(lons[j] - coords[0]);
-              if (dist < minDist && values[i] && values[i][j] !== undefined) {
-                minDist = dist;
-                closestValue = values[i][j];
-              }
-            }
-          }
-          
-          if (closestValue !== null) {
-            tooltip
-              .style('display', 'block')
-              .style('left', `${event.pageX + 10}px`)
-              .style('top', `${event.pageY - 10}px`)
-              .html(`
-                <strong>Location:</strong> ${coords[1].toFixed(1)}°N, ${Math.abs(coords[0]).toFixed(1)}°W<br/>
-                <strong>Anomaly:</strong> ${closestValue > 0 ? '+' : ''}${closestValue.toFixed(1)}°C
-              `);
-          }
-        }
-      })
-      .on('mouseout', () => {
-        tooltip.style('display', 'none');
-      });
+    // === FINAL TEST SHAPES (SHOULD ALWAYS BE VISIBLE) ===
+    svg.append('rect')
+      .attr('x', 100)
+      .attr('y', 100)
+      .attr('width', 200)
+      .attr('height', 80)
+      .attr('fill', 'red')
+      .attr('opacity', 1.0);
+
+    svg.append('circle')
+      .attr('cx', 500)
+      .attr('cy', 350)
+      .attr('r', 80)
+      .attr('fill', 'blue')
+      .attr('opacity', 1.0);
+
+    svg.append('text')
+      .attr('x', 600)
+      .attr('y', 200)
+      .attr('text-anchor', 'middle')
+      .attr('font-size', '48px')
+      .attr('fill', 'black')
+      .attr('font-weight', 'bold')
+      .text('SVG TEST TOP');
 
   }, [data, worldData]);
 
@@ -237,10 +340,10 @@ const App = () => {
         boxShadow: '0 2px 20px rgba(0,0,0,0.1)'
       }}>
         <h1 style={{ margin: 0, color: '#2c3e50', fontSize: '2.5rem', fontWeight: '300' }}>
-          North America Temperature Anomaly
+          North America Temperature Anomaly (DEBUG MODE)
         </h1>
         <p style={{ margin: '0.5rem 0 0', color: '#7f8c8d', fontSize: '1.1rem' }}>
-          High Resolution GFS Model Analysis • D3.js Visualization
+          Check browser console for debug information
         </p>
       </div>
 
@@ -420,117 +523,81 @@ const App = () => {
           </div>
 
           {data && (
-            <div style={{ 
-              background: 'white', 
-              borderRadius: '8px', 
-              padding: '1.5rem',
-              boxShadow: '0 2px 10px rgba(0,0,0,0.1)'
-            }}>
-              <h3 style={{ margin: '0 0 1rem', color: '#333', fontSize: '1.1rem', fontWeight: '600' }}>
-                Statistics
-              </h3>
-              <div style={{ display: 'grid', gap: '1rem' }}>
-                <div style={{ 
-                  textAlign: 'center', 
-                  padding: '1rem', 
-                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', 
-                  borderRadius: '6px',
-                  color: 'white'
-                }}>
-                  <div style={{ fontSize: '1.4rem', fontWeight: '600' }}>
-                    {data.statistics.min_anomaly.toFixed(1)}°C
-                  </div>
-                  <div style={{ fontSize: '0.8rem', marginTop: '0.25rem', opacity: 0.9 }}>
-                    Coldest Anomaly
-                  </div>
+            <>
+              <div style={{ 
+                background: 'white', 
+                borderRadius: '8px', 
+                padding: '1.5rem',
+                boxShadow: '0 2px 10px rgba(0,0,0,0.1)'
+              }}>
+                <h3 style={{ margin: '0 0 1rem', color: '#333', fontSize: '1.1rem', fontWeight: '600' }}>
+                  Debug Info
+                </h3>
+                <div style={{ fontSize: '0.85rem', fontFamily: 'monospace', color: '#666' }}>
+                  <div>Grid: {data.anomaly_data?.lats?.length} x {data.anomaly_data?.lons?.length}</div>
+                  <div>Lat: {data.anomaly_data?.lats?.[0]?.toFixed(1)}° to {data.anomaly_data?.lats?.[data.anomaly_data.lats.length-1]?.toFixed(1)}°</div>
+                  <div>Lon: {data.anomaly_data?.lons?.[0]?.toFixed(1)}° to {data.anomaly_data?.lons?.[data.anomaly_data.lons.length-1]?.toFixed(1)}°</div>
+                  <div>Circles: <span id="circle-count">Check console</span></div>
                 </div>
-                <div style={{ 
-                  textAlign: 'center', 
-                  padding: '1rem', 
-                  background: '#f5f5f5', 
-                  borderRadius: '6px' 
-                }}>
-                  <div style={{ fontSize: '1.4rem', fontWeight: '600', color: '#666' }}>
-                    {data.statistics.mean_anomaly.toFixed(1)}°C
+              </div>
+
+              <div style={{ 
+                background: 'white', 
+                borderRadius: '8px', 
+                padding: '1.5rem',
+                boxShadow: '0 2px 10px rgba(0,0,0,0.1)'
+              }}>
+                <h3 style={{ margin: '0 0 1rem', color: '#333', fontSize: '1.1rem', fontWeight: '600' }}>
+                  Statistics
+                </h3>
+                <div style={{ display: 'grid', gap: '1rem' }}>
+                  <div style={{ 
+                    textAlign: 'center', 
+                    padding: '1rem', 
+                    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', 
+                    borderRadius: '6px',
+                    color: 'white'
+                  }}>
+                    <div style={{ fontSize: '1.4rem', fontWeight: '600' }}>
+                      {data.statistics.min_anomaly.toFixed(1)}°C
+                    </div>
+                    <div style={{ fontSize: '0.8rem', marginTop: '0.25rem', opacity: 0.9 }}>
+                      Coldest Anomaly
+                    </div>
                   </div>
-                  <div style={{ fontSize: '0.8rem', color: '#888', marginTop: '0.25rem' }}>
-                    Continental Average
+                  <div style={{ 
+                    textAlign: 'center', 
+                    padding: '1rem', 
+                    background: '#f5f5f5', 
+                    borderRadius: '6px' 
+                  }}>
+                    <div style={{ fontSize: '1.4rem', fontWeight: '600', color: '#666' }}>
+                      {data.statistics.mean_anomaly.toFixed(1)}°C
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: '#888', marginTop: '0.25rem' }}>
+                      Continental Average
+                    </div>
                   </div>
-                </div>
-                <div style={{ 
-                  textAlign: 'center', 
-                  padding: '1rem', 
-                  background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)', 
-                  borderRadius: '6px',
-                  color: 'white'
-                }}>
-                  <div style={{ fontSize: '1.4rem', fontWeight: '600' }}>
-                    +{data.statistics.max_anomaly.toFixed(1)}°C
-                  </div>
-                  <div style={{ fontSize: '0.8rem', marginTop: '0.25rem', opacity: 0.9 }}>
-                    Warmest Anomaly
+                  <div style={{ 
+                    textAlign: 'center', 
+                    padding: '1rem', 
+                    background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)', 
+                    borderRadius: '6px',
+                    color: 'white'
+                  }}>
+                    <div style={{ fontSize: '1.4rem', fontWeight: '600' }}>
+                      +{data.statistics.max_anomaly.toFixed(1)}°C
+                    </div>
+                    <div style={{ fontSize: '0.8rem', marginTop: '0.25rem', opacity: 0.9 }}>
+                      Warmest Anomaly
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
+            </>
           )}
-
-          <div style={{ 
-            background: 'white', 
-            borderRadius: '8px', 
-            padding: '1.5rem',
-            boxShadow: '0 2px 10px rgba(0,0,0,0.1)'
-          }}>
-            <h3 style={{ margin: '0 0 1rem', color: '#333', fontSize: '1.1rem', fontWeight: '600' }}>
-              Map Information
-            </h3>
-            <div style={{ fontSize: '0.85rem', lineHeight: '1.6', color: '#666' }}>
-              <div style={{ marginBottom: '0.75rem' }}>
-                <strong style={{ color: '#444' }}>Projection:</strong> Azimuthal Equal-Area
-              </div>
-              <div style={{ marginBottom: '0.75rem' }}>
-                <strong style={{ color: '#444' }}>Coverage:</strong> North America (15°N - 85°N)
-              </div>
-              <div style={{ marginBottom: '0.75rem' }}>
-                <strong style={{ color: '#444' }}>Data Source:</strong> {data?.source || 'NOAA GFS'}
-              </div>
-              <div style={{ marginBottom: '0.75rem' }}>
-                <strong style={{ color: '#444' }}>Grid Resolution:</strong> {data?.resolution || '0.25°'}
-              </div>
-              <div>
-                <strong style={{ color: '#444' }}>Update Cycle:</strong> Every 6 hours
-              </div>
-            </div>
-          </div>
-
-          <div style={{ 
-            background: '#f0f7ff', 
-            borderRadius: '8px', 
-            padding: '1rem',
-            border: '1px solid #90caf9'
-          }}>
-            <div style={{ fontSize: '0.85rem', color: '#1976d2' }}>
-              <strong>💡 Tip:</strong> Hover over the temperature points to see anomaly values at specific locations.
-            </div>
-          </div>
         </div>
       </div>
-
-      {/* Tooltip */}
-      <div 
-        ref={tooltipRef}
-        style={{
-          position: 'absolute',
-          display: 'none',
-          background: 'rgba(0, 0, 0, 0.85)',
-          color: 'white',
-          padding: '8px 12px',
-          borderRadius: '4px',
-          fontSize: '0.85rem',
-          pointerEvents: 'none',
-          zIndex: 1000
-        }}
-      ></div>
 
       <style>{`
         @keyframes spin {
@@ -541,6 +608,7 @@ const App = () => {
     </div>
   );
 };
+
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(<App />);
