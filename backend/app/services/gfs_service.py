@@ -38,71 +38,79 @@ class RealGFSDataService:
         try:
             date_str = run_time.strftime("%Y%m%d")
             hour_str = f"{run_time.hour:02d}"
-            
+
             # Try primary NOMADS URL first
             urls_to_try = [
                 f"{self.base_url}/gfs{date_str}/gfs_0p25_{hour_str}z",
                 f"{self.backup_url}/GFS_Global_0p25deg_{date_str}_{hour_str}00.grib2"
             ]
-            
+
             for url in urls_to_try:
                 try:
                     logger.info(f"Attempting to fetch GFS data from: {url}")
-                    
-                    # Open dataset with timeout
-                    ds = await asyncio.wait_for(
-                        asyncio.to_thread(xr.open_dataset, url, engine='netcdf4'),
-                        timeout=30.0
-                    )
-                    
-                    # Look for temperature variable (different names possible)
-                    temp_vars = ['tmp2m', 'TMP_2maboveground', 'Temperature_height_above_ground', 'tmp']
-                    temp_var = None
-                    
-                    for var in temp_vars:
-                        if var in ds.variables:
-                            temp_var = var
-                            break
-                    
-                    if temp_var is None:
-                        logger.warning(f"No temperature variable found in dataset. Available vars: {list(ds.variables.keys())}")
-                        continue
-                    
-                    # Select forecast time and temperature data
-                    if 'time' in ds.dims:
-                        if len(ds.time) > forecast_hour:
-                            temp_data = ds.isel(time=forecast_hour)[temp_var]
-                        else:
-                            temp_data = ds.isel(time=0)[temp_var]
+
+                    # For NOMADS, we can use OpenDAP subsetting to get only what we need
+                    if "nomads" in url:
+                        # --- Coordinate‑based slicing (no guess‑work on array indices) ---
+                        time_idx = forecast_hour // 3  # GFS outputs every 3 h
+
+                        # Build a minimal OPeNDAP URL requesting only the chosen time slice & variable
+                        slice_url = f"{url}?tmp2m[{time_idx}:1:{time_idx}]"
+
+                        # Use pydap for NOMADS – lightweight and avoids the “netCDF4 compiled without DAP” issue
+                        engine = "pydap"
+                        logger.debug(f"OPeNDAP fetch: {slice_url} (engine={engine})")
+
+                        ds = await asyncio.wait_for(
+                            asyncio.to_thread(xr.open_dataset, slice_url, engine=engine),
+                            timeout=60.0,
+                        )
+
+                        # Select the North‑America window by **coordinates**:
+                        # GFS longitudes are 0–360; 170 W→50 W  == 190→310
+                        ds = ds.sel(lat=slice(85, 15), lon=slice(190, 310))
+
                     else:
-                        temp_data = ds[temp_var]
-                    
-                    # Focus on North America bounds for higher resolution
-                    # 15°N to 85°N, 170°W to 50°W
-                    if 'lat' in temp_data.dims and 'lon' in temp_data.dims:
-                        temp_data = temp_data.sel(
-                            lat=slice(85, 15),  # Note: may need to reverse depending on data order
-                            lon=slice(190, 310)  # Convert to 0-360 longitude system
+                        # UCAR THREDDS GRIB2 fallback – still use netcdf4
+                        engine = "netcdf4"
+                        logger.debug(f"THREDDS fetch: {url} (engine={engine})")
+
+                        ds = await asyncio.wait_for(
+                            asyncio.to_thread(xr.open_dataset, url, engine=engine),
+                            timeout=60.0,
                         )
-                    elif 'latitude' in temp_data.dims and 'longitude' in temp_data.dims:
-                        temp_data = temp_data.sel(
-                            latitude=slice(85, 15),
-                            longitude=slice(-170, -50)
+
+                    # Extract temperature variable
+                    if "tmp2m" in ds.variables:
+                        temp_data = ds["tmp2m"]
+                    elif "TMP_2maboveground" in ds.variables:
+                        temp_data = ds["TMP_2maboveground"]
+                    else:
+                        logger.warning(
+                            f"No temperature variable found. Available variables: {list(ds.variables.keys())}"
                         )
-                    
+                        continue
+
+                    # Ensure we have valid data
+                    if temp_data.size == 0:
+                        logger.warning("Empty temperature data")
+                        continue
+
                     logger.info(f"Successfully fetched GFS data from {url}")
-                    return temp_data.to_dataset()
-                    
+                    logger.info(f"Data shape: {temp_data.shape}, dims: {temp_data.dims}")
+
+                    return temp_data.to_dataset(name="temperature")
+
                 except asyncio.TimeoutError:
                     logger.warning(f"Timeout fetching from {url}")
                     continue
                 except Exception as e:
                     logger.warning(f"Failed to fetch from {url}: {e}")
                     continue
-            
+
             logger.error("All GFS data sources failed")
             return None
-            
+
         except Exception as e:
             logger.error(f"Error in fetch_gfs_temperature: {e}")
             return None
@@ -110,50 +118,82 @@ class RealGFSDataService:
     def calculate_temperature_anomaly(self, temp_data: xr.Dataset) -> xr.Dataset:
         """Calculate temperature anomaly from climatology"""
         try:
-            # Get the temperature variable name
-            temp_var = None
-            for var in ['tmp2m', 'TMP_2maboveground', 'Temperature_height_above_ground', 'tmp']:
-                if var in temp_data.variables:
-                    temp_var = var
+            # Get temperature values
+            if 'temperature' in temp_data:
+                temp_values = temp_data['temperature'].values
+                temp_var = temp_data['temperature']
+            elif 'tmp2m' in temp_data:
+                temp_values = temp_data['tmp2m'].values
+                temp_var = temp_data['tmp2m']
+            else:
+                # Find the temperature variable
+                for var in temp_data.data_vars:
+                    temp_values = temp_data[var].values
+                    temp_var = temp_data[var]
                     break
             
-            if temp_var is None:
-                raise ValueError("No temperature variable found")
-            
-            temp_values = temp_data[temp_var].values
-            
             # Get coordinates
-            if 'lat' in temp_data.coords:
-                lats = temp_data['lat'].values
-                lons = temp_data['lon'].values
-            elif 'latitude' in temp_data.coords:
-                lats = temp_data['latitude'].values
-                lons = temp_data['longitude'].values
-            else:
-                raise ValueError("No latitude/longitude coordinates found")
+            lat_name = 'lat' if 'lat' in temp_var.coords else 'latitude'
+            lon_name = 'lon' if 'lon' in temp_var.coords else 'longitude'
+            
+            lats = temp_var[lat_name].values
+            lons = temp_var[lon_name].values
+            
+            # Handle multi-dimensional temperature data
+            if len(temp_values.shape) > 2:
+                # If there's a time dimension, select the first time
+                if len(temp_values.shape) == 3:
+                    temp_values = temp_values[0, :, :]
+                else:
+                    # Squeeze out any singleton dimensions
+                    temp_values = np.squeeze(temp_values)
+            
+            # Ensure 2D array
+            if len(temp_values.shape) != 2:
+                raise ValueError(f"Unexpected temperature data shape: {temp_values.shape}")
+            
+            logger.info(f"Temperature data shape after processing: {temp_values.shape}")
+            logger.info(f"Lat range: {np.min(lats):.1f} to {np.max(lats):.1f}")
+            logger.info(f"Lon range: {np.min(lons):.1f} to {np.max(lons):.1f}")
             
             # Convert temperature from Kelvin to Celsius if needed
-            if np.mean(temp_values) > 200:  # Likely in Kelvin
+            if np.nanmean(temp_values) > 200:  # Likely in Kelvin
                 temp_values = temp_values - 273.15
+                logger.info("Converted temperature from Kelvin to Celsius")
             
-            # Create simplified climatology based on latitude (seasonal normals approximation)
+            # Create simplified climatology based on latitude
             lat_grid, lon_grid = np.meshgrid(lons, lats)
             
-            # Seasonal temperature approximation for current time of year
+            # Get current date for seasonal adjustment
             now = datetime.utcnow()
             day_of_year = now.timetuple().tm_yday
-            seasonal_factor = np.cos(2 * np.pi * (day_of_year - 172) / 365.25)  # Peak summer around day 172
             
-            # Approximate climatology: temperature decreases with latitude, seasonal variation
-            base_temp = 25 - 0.7 * np.abs(lat_grid)  # Base temperature pattern
-            seasonal_temp = base_temp + 10 * seasonal_factor  # Add seasonal variation
+            # Seasonal factor (peak summer around day 172)
+            seasonal_factor = np.cos(2 * np.pi * (day_of_year - 172) / 365.25)
+            
+            # Approximate climatology
+            base_temp = 25 - 0.7 * np.abs(lat_grid)  # Base decreases with latitude
+            seasonal_adjustment = 10 * seasonal_factor * (1 - np.abs(lat_grid) / 90)  # Stronger seasonal effect at high latitudes
+            continental_effect = -5 * np.exp(-((lon_grid + 100)**2) / 1000)  # Continental cooling effect
+            
+            climatology = base_temp + seasonal_adjustment + continental_effect
             
             # Calculate anomaly
-            anomaly = temp_values - seasonal_temp
+            anomaly = temp_values - climatology
             
-            # Create anomaly dataset
-            anomaly_ds = temp_data.copy()
-            anomaly_ds[temp_var] = (temp_data[temp_var].dims, anomaly)
+            # Log statistics
+            valid_mask = ~np.isnan(anomaly)
+            if np.any(valid_mask):
+                logger.info(f"Anomaly statistics: min={np.nanmin(anomaly):.1f}, max={np.nanmax(anomaly):.1f}, mean={np.nanmean(anomaly):.1f}")
+                logger.info(f"Valid data points: {np.sum(valid_mask)} out of {anomaly.size}")
+            
+            # Create anomaly dataset with proper coordinates
+            anomaly_ds = xr.Dataset({
+                'anomaly': ([lat_name, lon_name], anomaly),
+            }, coords={
+                lat_name: lats,
+                lon_name: lons
+            })
             
             return anomaly_ds
             
@@ -193,31 +233,46 @@ class RealGFSDataService:
     def format_for_frontend(self, anomaly_data: xr.Dataset, run_time: datetime, forecast_hour: int) -> Dict:
         """Format real GFS data for frontend consumption"""
         try:
-            # Get the temperature variable name
-            temp_var = None
-            for var in ['tmp2m', 'TMP_2maboveground', 'Temperature_height_above_ground', 'tmp']:
-                if var in anomaly_data.variables:
-                    temp_var = var
-                    break
+            # Get anomaly values
+            anomaly_values = anomaly_data['anomaly'].values
             
-            anomaly_values = anomaly_data[temp_var].values
+            # Get coordinate names
+            lat_name = 'lat' if 'lat' in anomaly_data.coords else 'latitude'
+            lon_name = 'lon' if 'lon' in anomaly_data.coords else 'longitude'
             
-            # Get coordinates
-            if 'lat' in anomaly_data.coords:
-                lats = anomaly_data['lat'].values
-                lons = anomaly_data['lon'].values
-            elif 'latitude' in anomaly_data.coords:
-                lats = anomaly_data['latitude'].values
-                lons = anomaly_data['longitude'].values
+            lats = anomaly_data[lat_name].values
+            lons = anomaly_data[lon_name].values
             
             # Convert longitude to -180 to 180 if needed
             if np.max(lons) > 180:
                 lons = np.where(lons > 180, lons - 360, lons)
+                # Also need to reorder the data if we wrapped longitudes
+                if np.any(lons < 0) and np.any(lons > 0):
+                    # Find the wrapping point
+                    wrap_idx = np.where(np.diff(lons) < 0)[0]
+                    if len(wrap_idx) > 0:
+                        wrap_idx = wrap_idx[0] + 1
+                        # Reorder lons and data
+                        lons = np.concatenate([lons[wrap_idx:], lons[:wrap_idx]])
+                        anomaly_values = np.concatenate([anomaly_values[:, wrap_idx:], anomaly_values[:, :wrap_idx]], axis=1)
             
-            # Ensure we have valid data
-            valid_data = ~np.isnan(anomaly_values)
-            if not np.any(valid_data):
+            # Ensure lats are in descending order (common for GFS data)
+            if lats[0] < lats[-1]:
+                lats = lats[::-1]
+                anomaly_values = anomaly_values[::-1, :]
+            
+            # Check for valid data
+            valid_mask = ~np.isnan(anomaly_values)
+            valid_count = np.sum(valid_mask)
+            total_count = anomaly_values.size
+            
+            logger.info(f"Data validation: {valid_count}/{total_count} valid points ({100*valid_count/total_count:.1f}%)")
+            
+            if valid_count == 0:
                 raise ValueError("No valid temperature anomaly data")
+            
+            # Replace NaN with 0 for visualization
+            anomaly_values_clean = np.nan_to_num(anomaly_values, nan=0.0)
             
             return {
                 "run_time": run_time.isoformat(),
@@ -226,7 +281,7 @@ class RealGFSDataService:
                 "anomaly_data": {
                     "lats": lats.tolist(),
                     "lons": lons.tolist(),
-                    "values": np.nan_to_num(anomaly_values, nan=0.0).tolist()
+                    "values": anomaly_values_clean.tolist()
                 },
                 "statistics": {
                     "min_anomaly": float(np.nanmin(anomaly_values)),

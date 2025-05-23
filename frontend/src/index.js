@@ -14,7 +14,7 @@ const App = () => {
 
   // Load world topology data
   useEffect(() => {
-    fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json')
+    fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-50m.json')
       .then(response => response.json())
       .then(data => {
         setWorldData(data);
@@ -85,6 +85,13 @@ const App = () => {
     // Use full projection for complete North America view
     const path = d3.geoPath().projection(projectionFull);
 
+    // ---- Combined North‑America geometry ----
+    const naIds = [840, 124, 484]; // USA, Canada, Mexico
+    const naGeoms = worldData.objects.countries.geometries.filter(g =>
+      naIds.includes(g.id)
+    );
+    const mergedNA = topojson.merge(worldData, naGeoms);
+
     // Create color scale
     const colorScale = d3.scaleSequential()
       .domain([min_anomaly, max_anomaly])
@@ -113,42 +120,56 @@ const App = () => {
       .from(contourData, d => projectionFull([d.lon, d.lat])?.[0] || 0, d => projectionFull([d.lon, d.lat])?.[1] || 0)
       .voronoi([0, 0, width, height]);
 
-    // Draw temperature anomaly layer
-    const tempLayer = svg.append('g').attr('class', 'temperature-layer');
+    // ---- Rasterised temperature layer ----
+    const gridSize = 5; // px
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
 
-    // Create a finer grid for smoother visualization
-    const gridSize = 5; // pixels
     for (let x = 0; x < width; x += gridSize) {
       for (let y = 0; y < height; y += gridSize) {
-        const index = voronoi.delaunay.find(x, y);
-        if (index !== -1 && contourData[index]) {
-          const projected = projectionFull.invert([x, y]);
-          if (projected) {
-            tempLayer.append('rect')
-              .attr('x', x)
-              .attr('y', y)
-              .attr('width', gridSize)
-              .attr('height', gridSize)
-              .attr('fill', reverseColorScale(contourData[index].value))
-              .attr('opacity', 0.8);
-          }
+        const idx = voronoi.delaunay.find(x, y);
+        if (idx !== -1 && contourData[idx]) {
+          ctx.fillStyle = reverseColorScale(contourData[idx].value);
+          ctx.fillRect(x, y, gridSize, gridSize);
         }
       }
     }
 
-    // Apply a blur filter for smoother appearance
-    const defs = svg.append('defs');
-    const filter = defs.append('filter')
-      .attr('id', 'blur')
-      .attr('x', '-50%')
-      .attr('y', '-50%')
-      .attr('width', '200%')
-      .attr('height', '200%');
-    filter.append('feGaussianBlur')
-      .attr('in', 'SourceGraphic')
-      .attr('stdDeviation', 2);
+    const tempImage = svg.append('image')
+      .attr('x', 0)
+      .attr('y', 0)
+      .attr('width', width)
+      .attr('height', height)
+      .attr('href', canvas.toDataURL());
 
-    tempLayer.style('filter', 'url(#blur)');
+    // defs (reuse if exists)
+    const defs = svg.select('defs').empty() ? svg.append('defs') : svg.select('defs');
+
+    // blur filter
+    if (defs.select('#blur').empty()) {
+      const blur = defs.append('filter')
+        .attr('id', 'blur')
+        .attr('x', '-50%')
+        .attr('y', '-50%')
+        .attr('width', '200%')
+        .attr('height', '200%');
+      blur.append('feGaussianBlur')
+        .attr('in', 'SourceGraphic')
+        .attr('stdDeviation', 2);
+    }
+    tempImage.style('filter', 'url(#blur)');
+
+    // clipPath for North America landmass
+    if (defs.select('#naClip').empty()) {
+      defs.append('clipPath')
+        .attr('id', 'naClip')
+        .append('path')
+        .datum(mergedNA)
+        .attr('d', path);
+    }
+    tempImage.attr('clip-path', 'url(#naClip)');
 
     // Draw world map
     const world = topojson.feature(worldData, worldData.objects.countries);
@@ -167,6 +188,13 @@ const App = () => {
       .attr('stroke', d => northAmericaCountries.includes(d.id) ? '#333' : '#999')
       .attr('stroke-width', d => northAmericaCountries.includes(d.id) ? 1.5 : 0.5)
       .attr('opacity', d => northAmericaCountries.includes(d.id) ? 1 : 0.3);
+
+    svg.append('path')
+      .datum(mergedNA)
+      .attr('d', path)
+      .attr('fill', 'none')
+      .attr('stroke', '#222')
+      .attr('stroke-width', 1.5);
 
     // Add graticule (grid lines)
     const graticule = d3.geoGraticule()
@@ -229,38 +257,27 @@ const App = () => {
     const tooltip = d3.select(tooltipRef.current);
 
     svg.on('mousemove', (event) => {
-      const [x, y] = d3.pointer(event);
-      const coords = projectionFull.invert([x, y]);
-      
-      if (coords) {
-        const [lon, lat] = coords;
-        
-        // Find nearest data point
-        let nearestValue = null;
-        let minDistance = Infinity;
-        
-        contourData.forEach(point => {
-          const distance = Math.sqrt(
-            Math.pow(lat - point.lat, 2) + Math.pow(lon - point.lon, 2)
-          );
-          if (distance < minDistance && distance < 2) { // Within 2 degrees
-            minDistance = distance;
-            nearestValue = point.value;
-          }
-        });
-        
-        if (nearestValue !== null) {
+      const [mx, my] = d3.pointer(event);
+      const idx = voronoi.delaunay.find(mx, my);
+
+      if (idx !== -1 && contourData[idx]) {
+        const geo = projectionFull.invert([mx, my]);
+        if (geo) {
+          const [lon, lat] = geo;
+          const val = contourData[idx].value;
           tooltip
             .style('display', 'block')
-            .style('left', (event.pageX + 10) + 'px')
-            .style('top', (event.pageY - 10) + 'px')
+            .style('left', `${event.pageX + 10}px`)
+            .style('top', `${event.pageY - 10}px`)
             .html(`
               <strong>Location:</strong> ${lat.toFixed(1)}°N, ${Math.abs(lon).toFixed(1)}°W<br/>
-              <strong>Anomaly:</strong> ${nearestValue > 0 ? '+' : ''}${nearestValue.toFixed(1)}°C
+              <strong>Anomaly:</strong> ${val > 0 ? '+' : ''}${val.toFixed(1)}°C
             `);
         } else {
           tooltip.style('display', 'none');
         }
+      } else {
+        tooltip.style('display', 'none');
       }
     });
 
