@@ -52,23 +52,28 @@ class RealGFSDataService:
                     # For NOMADS, we can use OpenDAP subsetting to get only what we need
                     if "nomads" in url:
                         # --- Coordinate‑based slicing (no guess‑work on array indices) ---
-                        time_idx = forecast_hour // 3  # GFS outputs every 3 h
+                        time_idx = forecast_hour // 3  # GFS outputs every 3 h
 
                         # Build a minimal OPeNDAP URL requesting only the chosen time slice & variable
                         slice_url = f"{url}?tmp2m[{time_idx}:1:{time_idx}]"
 
-                        # Use pydap for NOMADS – lightweight and avoids the “netCDF4 compiled without DAP” issue
+                        # Use pydap for NOMADS – lightweight and avoids the "netCDF4 compiled without DAP" issue
                         engine = "pydap"
                         logger.debug(f"OPeNDAP fetch: {slice_url} (engine={engine})")
 
-                        ds = await asyncio.wait_for(
-                            asyncio.to_thread(xr.open_dataset, slice_url, engine=engine),
-                            timeout=60.0,
-                        )
+                        try:
+                            ds = await asyncio.wait_for(
+                                asyncio.to_thread(xr.open_dataset, slice_url, engine=engine),
+                                timeout=60.0,
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed to open dataset with {engine}: {e}")
+                            raise
 
                         # Select the North‑America window by **coordinates**:
-                        # GFS longitudes are 0–360; 170 W→50 W  == 190→310
-                        ds = ds.sel(lat=slice(85, 15), lon=slice(190, 310))
+                        # GFS longitudes are 0–360; 170 W→50 W  == 190→310
+                        # Use .sel with method='nearest' to handle edge cases
+                        ds = ds.sel(lat=slice(85, 15), lon=slice(190, 310), method='nearest')
 
                     else:
                         # UCAR THREDDS GRIB2 fallback – still use netcdf4
@@ -79,12 +84,25 @@ class RealGFSDataService:
                             asyncio.to_thread(xr.open_dataset, url, engine=engine),
                             timeout=60.0,
                         )
+                        
+                        # For UCAR, don't try to subset by coordinates in the URL
+                        # Just open the full dataset and subset after
 
                     # Extract temperature variable
                     if "tmp2m" in ds.variables:
                         temp_data = ds["tmp2m"]
                     elif "TMP_2maboveground" in ds.variables:
                         temp_data = ds["TMP_2maboveground"]
+                    elif "Temperature_height_above_ground" in ds.variables:
+                        temp_data = ds["Temperature_height_above_ground"]
+                        # For UCAR, we need to select the correct height and time
+                        if "height_above_ground" in temp_data.dims:
+                            # Select 2m height (usually the first level)
+                            temp_data = temp_data.isel(height_above_ground=0)
+                        if "time" in temp_data.dims:
+                            # Select the appropriate forecast time
+                            time_idx = min(forecast_hour // 3, len(temp_data.time) - 1)
+                            temp_data = temp_data.isel(time=time_idx)
                     else:
                         logger.warning(
                             f"No temperature variable found. Available variables: {list(ds.variables.keys())}"
@@ -95,6 +113,14 @@ class RealGFSDataService:
                     if temp_data.size == 0:
                         logger.warning("Empty temperature data")
                         continue
+                    
+                    # For UCAR data, subset to North America after loading
+                    if "thredds" in url:
+                        if "lat" in temp_data.coords and "lon" in temp_data.coords:
+                            # UCAR uses -180 to 180 longitude
+                            temp_data = temp_data.sel(lat=slice(85, 15), lon=slice(-170, -50))
+                        else:
+                            logger.warning("Could not find lat/lon coordinates in UCAR data")
 
                     logger.info(f"Successfully fetched GFS data from {url}")
                     logger.info(f"Data shape: {temp_data.shape}, dims: {temp_data.dims}")

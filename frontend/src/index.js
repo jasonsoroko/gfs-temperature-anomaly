@@ -61,7 +61,6 @@ const App = () => {
     // Set dimensions
     const width = 1000;
     const height = 700;
-    const margin = { top: 20, right: 20, bottom: 20, left: 20 };
 
     // Create SVG
     const svg = d3.select(svgRef.current)
@@ -70,112 +69,24 @@ const App = () => {
       .style('background', '#f0f8ff');
 
     // Create projection focused on North America
-    const projection = d3.geoAlbersUsa()
-      .scale(1300)
-      .translate([width / 2, height / 2]);
-
-    // Alternative projection for full North America including Canada and Mexico
-    const projectionFull = d3.geoAzimuthalEqualArea()
+    const projection = d3.geoAzimuthalEqualArea()
       .rotate([100, -45])
       .scale(1100)
       .translate([width / 2, height / 2])
       .clipAngle(180 - 1e-3)
       .precision(1);
 
-    // Use full projection for complete North America view
-    const path = d3.geoPath().projection(projectionFull);
+    const path = d3.geoPath().projection(projection);
 
-    // ---- Combined North‑America geometry ----
-    const naIds = [840, 124, 484]; // USA, Canada, Mexico
-    const naGeoms = worldData.objects.countries.geometries.filter(g =>
-      naIds.includes(g.id)
-    );
-    const mergedNA = topojson.merge(worldData, naGeoms);
-
-    // Create color scale
+    // Create color scale (reversed so blue is cold, red is hot)
     const colorScale = d3.scaleSequential()
-      .domain([min_anomaly, max_anomaly])
+      .domain([max_anomaly, min_anomaly]) // Reversed domain
       .interpolator(d3.interpolateRdBu)
       .clamp(true);
 
-    // Reverse the color scale so blue is cold and red is hot
-    const reverseColorScale = (value) => colorScale(max_anomaly + min_anomaly - value);
-
-    // Create contour data from grid
-    const contourData = [];
-    for (let i = 0; i < lats.length; i++) {
-      for (let j = 0; j < lons.length; j++) {
-        if (values[i] && values[i][j] !== undefined && !isNaN(values[i][j])) {
-          contourData.push({
-            lat: lats[i],
-            lon: lons[j],
-            value: values[i][j]
-          });
-        }
-      }
-    }
-
-    // Create Voronoi diagram for interpolation
-    const voronoi = d3.Delaunay
-      .from(contourData, d => projectionFull([d.lon, d.lat])?.[0] || 0, d => projectionFull([d.lon, d.lat])?.[1] || 0)
-      .voronoi([0, 0, width, height]);
-
-    // ---- Rasterised temperature layer ----
-    const gridSize = 5; // px
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d');
-
-    for (let x = 0; x < width; x += gridSize) {
-      for (let y = 0; y < height; y += gridSize) {
-        const idx = voronoi.delaunay.find(x, y);
-        if (idx !== -1 && contourData[idx]) {
-          ctx.fillStyle = reverseColorScale(contourData[idx].value);
-          ctx.fillRect(x, y, gridSize, gridSize);
-        }
-      }
-    }
-
-    const tempImage = svg.append('image')
-      .attr('x', 0)
-      .attr('y', 0)
-      .attr('width', width)
-      .attr('height', height)
-      .attr('href', canvas.toDataURL());
-
-    // defs (reuse if exists)
-    const defs = svg.select('defs').empty() ? svg.append('defs') : svg.select('defs');
-
-    // blur filter
-    if (defs.select('#blur').empty()) {
-      const blur = defs.append('filter')
-        .attr('id', 'blur')
-        .attr('x', '-50%')
-        .attr('y', '-50%')
-        .attr('width', '200%')
-        .attr('height', '200%');
-      blur.append('feGaussianBlur')
-        .attr('in', 'SourceGraphic')
-        .attr('stdDeviation', 2);
-    }
-    tempImage.style('filter', 'url(#blur)');
-
-    // clipPath for North America landmass
-    if (defs.select('#naClip').empty()) {
-      defs.append('clipPath')
-        .attr('id', 'naClip')
-        .append('path')
-        .datum(mergedNA)
-        .attr('d', path);
-    }
-    tempImage.attr('clip-path', 'url(#naClip)');
-
-    // Draw world map
+    // Draw world map first
     const world = topojson.feature(worldData, worldData.objects.countries);
-    
-    // Create a mask for North America
-    const northAmericaCountries = [840, 124, 484]; // USA, Canada, Mexico country codes
+    const northAmericaCountries = [840, 124, 484]; // USA, Canada, Mexico
     
     svg.append('g')
       .attr('class', 'countries')
@@ -184,17 +95,33 @@ const App = () => {
       .enter()
       .append('path')
       .attr('d', path)
-      .attr('fill', 'none')
-      .attr('stroke', d => northAmericaCountries.includes(d.id) ? '#333' : '#999')
-      .attr('stroke-width', d => northAmericaCountries.includes(d.id) ? 1.5 : 0.5)
-      .attr('opacity', d => northAmericaCountries.includes(d.id) ? 1 : 0.3);
+      .attr('fill', '#f5f5f5')
+      .attr('stroke', d => northAmericaCountries.includes(d.id) ? '#333' : '#ccc')
+      .attr('stroke-width', d => northAmericaCountries.includes(d.id) ? 1.5 : 0.5);
 
-    svg.append('path')
-      .datum(mergedNA)
-      .attr('d', path)
-      .attr('fill', 'none')
-      .attr('stroke', '#222')
-      .attr('stroke-width', 1.5);
+    // Create a group for temperature data
+    const tempGroup = svg.append('g').attr('class', 'temperature-data');
+
+    // Draw temperature data as circles
+    const latStep = lats[0] - lats[1]; // Assuming uniform spacing
+    const lonStep = lons[1] - lons[0];
+    
+    for (let i = 0; i < lats.length; i++) {
+      for (let j = 0; j < lons.length; j++) {
+        if (values[i] && values[i][j] !== undefined && !isNaN(values[i][j])) {
+          const coords = projection([lons[j], lats[i]]);
+          if (coords) {
+            tempGroup.append('circle')
+              .attr('cx', coords[0])
+              .attr('cy', coords[1])
+              .attr('r', 4)
+              .attr('fill', colorScale(values[i][j]))
+              .attr('fill-opacity', 0.7)
+              .attr('stroke', 'none');
+          }
+        }
+      }
+    }
 
     // Add graticule (grid lines)
     const graticule = d3.geoGraticule()
@@ -226,7 +153,7 @@ const App = () => {
     const cityGroup = svg.append('g').attr('class', 'cities');
 
     cities.forEach(city => {
-      const projected = projectionFull(city.coords);
+      const projected = projection(city.coords);
       if (projected) {
         // City dot
         cityGroup.append('circle')
@@ -256,34 +183,45 @@ const App = () => {
     // Add interactive tooltip
     const tooltip = d3.select(tooltipRef.current);
 
-    svg.on('mousemove', (event) => {
-      const [mx, my] = d3.pointer(event);
-      const idx = voronoi.delaunay.find(mx, my);
-
-      if (idx !== -1 && contourData[idx]) {
-        const geo = projectionFull.invert([mx, my]);
-        if (geo) {
-          const [lon, lat] = geo;
-          const val = contourData[idx].value;
-          tooltip
-            .style('display', 'block')
-            .style('left', `${event.pageX + 10}px`)
-            .style('top', `${event.pageY - 10}px`)
-            .html(`
-              <strong>Location:</strong> ${lat.toFixed(1)}°N, ${Math.abs(lon).toFixed(1)}°W<br/>
-              <strong>Anomaly:</strong> ${val > 0 ? '+' : ''}${val.toFixed(1)}°C
-            `);
-        } else {
-          tooltip.style('display', 'none');
+    tempGroup.selectAll('circle')
+      .on('mouseover', function(event, d) {
+        const circle = d3.select(this);
+        const cx = +circle.attr('cx');
+        const cy = +circle.attr('cy');
+        const fill = circle.attr('fill');
+        
+        // Find the data point
+        const coords = projection.invert([cx, cy]);
+        if (coords) {
+          // Find closest data point
+          let closestValue = null;
+          let minDist = Infinity;
+          
+          for (let i = 0; i < lats.length; i++) {
+            for (let j = 0; j < lons.length; j++) {
+              const dist = Math.abs(lats[i] - coords[1]) + Math.abs(lons[j] - coords[0]);
+              if (dist < minDist && values[i] && values[i][j] !== undefined) {
+                minDist = dist;
+                closestValue = values[i][j];
+              }
+            }
+          }
+          
+          if (closestValue !== null) {
+            tooltip
+              .style('display', 'block')
+              .style('left', `${event.pageX + 10}px`)
+              .style('top', `${event.pageY - 10}px`)
+              .html(`
+                <strong>Location:</strong> ${coords[1].toFixed(1)}°N, ${Math.abs(coords[0]).toFixed(1)}°W<br/>
+                <strong>Anomaly:</strong> ${closestValue > 0 ? '+' : ''}${closestValue.toFixed(1)}°C
+              `);
+          }
         }
-      } else {
+      })
+      .on('mouseout', () => {
         tooltip.style('display', 'none');
-      }
-    });
-
-    svg.on('mouseout', () => {
-      tooltip.style('display', 'none');
-    });
+      });
 
   }, [data, worldData]);
 
@@ -572,7 +510,7 @@ const App = () => {
             border: '1px solid #90caf9'
           }}>
             <div style={{ fontSize: '0.85rem', color: '#1976d2' }}>
-              <strong>💡 Tip:</strong> Hover over the map to see temperature anomaly values at specific locations.
+              <strong>💡 Tip:</strong> Hover over the temperature points to see anomaly values at specific locations.
             </div>
           </div>
         </div>

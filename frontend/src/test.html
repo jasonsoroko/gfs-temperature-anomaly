@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Temperature Anomaly Test</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+</head>
+<body>
+    <h1>GFS Temperature Anomaly Test</h1>
+    <div id="status">Loading...</div>
+    <div id="data-info"></div>
+    <svg id="map" width="800" height="600" style="border: 1px solid #ccc; background: #f0f0f0;"></svg>
+
+    <script>
+        // Test API connection
+        async function testAPI() {
+            const status = document.getElementById('status');
+            const dataInfo = document.getElementById('data-info');
+            
+            try {
+                status.textContent = 'Fetching data...';
+                
+                const response = await fetch('http://localhost:8000/api/v1/temperature/anomaly?forecast_hour=0&use_mock=true');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                status.textContent = 'Data loaded successfully!';
+                
+                // Display data info
+                dataInfo.innerHTML = `
+                    <h3>Data Info:</h3>
+                    <p>Source: ${data.source}</p>
+                    <p>Mock Data: ${data.mock_data}</p>
+                    <p>Grid Size: ${data.anomaly_data.lats.length} x ${data.anomaly_data.lons.length}</p>
+                    <p>Min Anomaly: ${data.statistics.min_anomaly.toFixed(1)}°C</p>
+                    <p>Max Anomaly: ${data.statistics.max_anomaly.toFixed(1)}°C</p>
+                `;
+                
+                // Simple visualization
+                drawSimpleMap(data);
+                
+            } catch (error) {
+                status.textContent = 'Error: ' + error.message;
+                console.error('Error:', error);
+            }
+        }
+        
+        function drawSimpleMap(data) {
+            const svg = d3.select('#map');
+            const width = 800;
+            const height = 600;
+            
+            // Clear previous
+            svg.selectAll('*').remove();
+            
+            const { lats, lons, values } = data.anomaly_data;
+            const { min_anomaly, max_anomaly } = data.statistics;
+            
+            // Color scale
+            const colorScale = d3.scaleSequential()
+                .domain([min_anomaly, max_anomaly])
+                .interpolator(d3.interpolateRdBu);
+            
+            // Simple grid visualization
+            const cellWidth = width / lons.length;
+            const cellHeight = height / lats.length;
+            
+            // Draw grid cells
+            for (let i = 0; i < lats.length; i++) {
+                for (let j = 0; j < lons.length; j++) {
+                    if (values[i] && values[i][j] !== undefined) {
+                        svg.append('rect')
+                            .attr('x', j * cellWidth)
+                            .attr('y', i * cellHeight)
+                            .attr('width', cellWidth)
+                            .attr('height', cellHeight)
+                            .attr('fill', colorScale(values[i][j]))
+                            .attr('stroke', 'none');
+                    }
+                }
+            }
+            
+            // Add title
+            svg.append('text')
+                .attr('x', width / 2)
+                .attr('y', 30)
+                .attr('text-anchor', 'middle')
+                .attr('font-size', '20px')
+                .attr('font-weight', 'bold')
+                .text('Temperature Anomaly Grid');
+        }
+        
+        // Run test
+        testAPI();
+    </script>
+</body>
+</html>
