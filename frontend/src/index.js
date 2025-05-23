@@ -43,8 +43,8 @@ const App = () => {
     const minLat = 15, maxLat = 85;
     const minLon = -170, maxLon = -50;
     
-    for (let i = 0; i < lats.length; i += 5) {
-      for (let j = 0; j < lons.length; j += 5) {
+    for (let i = 0; i < lats.length; i += 2) {  // Higher resolution
+      for (let j = 0; j < lons.length; j += 2) {
         const lat = lats[i];
         const lon = lons[j];
         
