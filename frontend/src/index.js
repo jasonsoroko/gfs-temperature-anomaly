@@ -117,3 +117,207 @@ const App = () => {
               color: '#1976d2'
             }}>
               Valid: {new Date(data.valid_time).toLocaleString()}
+              {data.mock_data && <span style={{ marginLeft: '1rem', opacity: 0.7 }}>(Demo Data)</span>}
+            </div>
+          )}
+
+          {loading && (
+            <div style={{ 
+              display: 'flex', 
+              flexDirection: 'column', 
+              alignItems: 'center', 
+              height: '600px', 
+              justifyContent: 'center' 
+            }}>
+              <div style={{
+                width: '40px',
+                height: '40px',
+                border: '4px solid #e3e3e3',
+                borderTop: '4px solid #667eea',
+                borderRadius: '50%',
+                animation: 'spin 1s linear infinite'
+              }}></div>
+              <p>Loading North America temperature data...</p>
+            </div>
+          )}
+
+          {error && (
+            <div style={{ 
+              background: '#fee', 
+              color: '#c33', 
+              padding: '1rem', 
+              borderRadius: '8px',
+              borderLeft: '4px solid #c33'
+            }}>
+              ❌ Error: {error}
+            </div>
+          )}
+
+          {data && !loading && (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+              <div style={{ 
+                border: '2px solid #e1e8ed', 
+                borderRadius: '8px', 
+                overflow: 'hidden',
+                boxShadow: '0 2px 10px rgba(0,0,0,0.1)'
+              }}>
+                <svg width="900" height="600" viewBox="0 0 900 600">
+                  <rect width="900" height="600" fill="#f0f8ff" stroke="#ccc" />
+                  <line x1="0" y1="300" x2="900" y2="300" stroke="#ddd" strokeWidth="1" strokeDasharray="5,5" />
+                  
+                  {points.map((point, i) => (
+                    <circle
+                      key={i}
+                      cx={point.x}
+                      cy={point.y}
+                      r="4"
+                      fill={point.color}
+                      opacity="0.8"
+                    />
+                  ))}
+                  
+                  <text x="150" y="180" fontSize="14" fontWeight="600" fill="#2c3e50">CANADA</text>
+                  <text x="400" y="280" fontSize="14" fontWeight="600" fill="#2c3e50">UNITED STATES</text>
+                  <text x="350" y="500" fontSize="14" fontWeight="600" fill="#2c3e50">MEXICO</text>
+                </svg>
+              </div>
+
+              <div style={{ 
+                marginTop: '1rem', 
+                padding: '1rem', 
+                background: '#f8f9fa', 
+                borderRadius: '8px',
+                width: '100%',
+                maxWidth: '900px'
+              }}>
+                <div style={{ fontWeight: '600', marginBottom: '0.5rem' }}>Temperature Anomaly (°C)</div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem' }}>
+                  <span style={{ color: '#313695', fontWeight: '600' }}>Much Colder: {data.statistics.min_anomaly.toFixed(1)}°C</span>
+                  <span style={{ color: '#4575b4' }}>Colder</span>
+                  <span style={{ fontWeight: '600' }}>Normal: 0.0°C</span>
+                  <span style={{ color: '#fee090' }}>Warmer</span>
+                  <span style={{ color: '#d73027', fontWeight: '600' }}>Much Warmer: {data.statistics.max_anomaly.toFixed(1)}°C</span>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div style={{ width: '300px', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          <div style={{ 
+            background: 'white', 
+            borderRadius: '12px', 
+            padding: '1.5rem',
+            boxShadow: '0 4px 25px rgba(0,0,0,0.1)'
+          }}>
+            <h3 style={{ margin: '0 0 1rem', color: '#2c3e50' }}>🎛️ Controls</h3>
+            
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>
+                Forecast Hour:
+              </label>
+              <select 
+                value={forecastHour}
+                onChange={(e) => setForecastHour(parseInt(e.target.value))}
+                disabled={loading}
+                style={{
+                  width: '100%',
+                  padding: '0.75rem',
+                  border: '2px solid #e1e8ed',
+                  borderRadius: '6px',
+                  fontSize: '1rem'
+                }}
+              >
+                <option value={0}>Current Analysis</option>
+                <option value={6}>+6 hours</option>
+                <option value={12}>+12 hours</option>
+                <option value={24}>+1 day</option>
+                <option value={48}>+2 days</option>
+                <option value={72}>+3 days</option>
+                <option value={120}>+5 days</option>
+              </select>
+            </div>
+
+            <button 
+              onClick={() => fetchData(forecastHour)}
+              disabled={loading}
+              style={{
+                width: '100%',
+                padding: '0.75rem',
+                background: loading ? '#ccc' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                color: 'white',
+                border: 'none',
+                borderRadius: '6px',
+                fontSize: '1rem',
+                fontWeight: '600',
+                cursor: loading ? 'not-allowed' : 'pointer'
+              }}
+            >
+              {loading ? '🔄 Loading...' : '🔄 Refresh Data'}
+            </button>
+          </div>
+
+          {data && (
+            <div style={{ 
+              background: 'white', 
+              borderRadius: '12px', 
+              padding: '1.5rem',
+              boxShadow: '0 4px 25px rgba(0,0,0,0.1)'
+            }}>
+              <h3 style={{ margin: '0 0 1rem', color: '#2c3e50' }}>📊 North America Stats</h3>
+              <div style={{ display: 'grid', gap: '1rem' }}>
+                <div style={{ textAlign: 'center', padding: '1rem', background: '#e8f4fd', borderRadius: '8px', border: '2px solid #2980b9' }}>
+                  <div style={{ fontSize: '1.5rem', fontWeight: '700', color: '#2980b9' }}>
+                    {data.statistics.min_anomaly.toFixed(1)}°C
+                  </div>
+                  <div style={{ fontSize: '0.9rem', color: '#2980b9', fontWeight: '600' }}>COLDEST SPOT</div>
+                </div>
+                <div style={{ textAlign: 'center', padding: '1rem', background: '#f8f9fa', borderRadius: '8px' }}>
+                  <div style={{ fontSize: '1.5rem', fontWeight: '700', color: '#95a5a6' }}>
+                    {data.statistics.mean_anomaly.toFixed(1)}°C
+                  </div>
+                  <div style={{ fontSize: '0.9rem', color: '#7f8c8d' }}>CONTINENTAL AVERAGE</div>
+                </div>
+                <div style={{ textAlign: 'center', padding: '1rem', background: '#fdf2e8', borderRadius: '8px', border: '2px solid #e74c3c' }}>
+                  <div style={{ fontSize: '1.5rem', fontWeight: '700', color: '#e74c3c' }}>
+                    {data.statistics.max_anomaly.toFixed(1)}°C
+                  </div>
+                  <div style={{ fontSize: '0.9rem', color: '#e74c3c', fontWeight: '600' }}>WARMEST SPOT</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div style={{ 
+            background: 'white', 
+            borderRadius: '12px', 
+            padding: '1.5rem',
+            boxShadow: '0 4px 25px rgba(0,0,0,0.1)'
+          }}>
+            <h3 style={{ margin: '0 0 1rem', color: '#2c3e50' }}>📋 Map Info</h3>
+            <div style={{ fontSize: '0.9rem', lineHeight: '1.6', color: '#555' }}>
+              <p><strong>Coverage:</strong> North America</p>
+              <p><strong>Countries:</strong> USA, Canada, Mexico</p>
+              <p><strong>Resolution:</strong> GFS 0.25°</p>
+              <p><strong>Update:</strong> Every 6 hours</p>
+              <p><strong>Projection:</strong> Geographic</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+      `}</style>
+    </div>
+  );
+};
+
+// Render the App
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+
+export default App;
