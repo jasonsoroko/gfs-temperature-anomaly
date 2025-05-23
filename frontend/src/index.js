@@ -114,9 +114,9 @@ const App = () => {
             tempGroup.append('circle')
               .attr('cx', coords[0])
               .attr('cy', coords[1])
-              .attr('r', 4)
+              .attr('r', 10)
               .attr('fill', colorScale(values[i][j]))
-              .attr('fill-opacity', 0.7)
+              .attr('fill-opacity', 0.9)
               .attr('stroke', 'none');
           }
         }
