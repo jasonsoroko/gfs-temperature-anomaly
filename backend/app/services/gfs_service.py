@@ -2,8 +2,29 @@ import numpy as np
 from datetime import datetime, timedelta
 from typing import Dict
 import logging
+import httpx
 
 logger = logging.getLogger(__name__)
+
+class GFSDataService:
+    """Service for fetching real GFS temperature anomaly data"""
+    
+    def __init__(self):
+        self.base_url = "https://nomads.ncep.noaa.gov/dods/gfs_0p25"
+        
+    async def get_temperature_anomaly_data(self, forecast_hour: int = 0) -> Dict:
+        """Get real GFS temperature anomaly data"""
+        try:
+            # Try to fetch real data (this is a simplified version)
+            logger.info(f"Attempting to fetch real GFS data for hour {forecast_hour}")
+            
+            # For now, return an error to trigger fallback to mock data
+            # In a real implementation, this would fetch from NOMADS
+            return {"error": "Real GFS data fetching not yet implemented"}
+            
+        except Exception as e:
+            logger.error(f"Error fetching real GFS data: {e}")
+            return {"error": str(e)}
 
 class MockGFSDataService:
     """Mock service that generates synthetic temperature anomaly data"""
@@ -17,16 +38,17 @@ class MockGFSDataService:
         # Generate realistic-looking temperature anomalies
         lon_grid, lat_grid = np.meshgrid(lons, lats)
         
-        # Create some interesting patterns
+        # Create some interesting patterns focused on North America
         anomaly = (
             3 * np.sin(np.radians(lat_grid) * 2) * np.cos(np.radians(lon_grid) * 3) +
             2 * np.sin(np.radians(lat_grid) * 3) * np.sin(np.radians(lon_grid) * 2) +
             np.random.normal(0, 1, lat_grid.shape)
         )
         
-        # Add some regional patterns
+        # Add some regional patterns for North America
         anomaly += 5 * np.exp(-((lat_grid - 45)**2 + (lon_grid - (-100))**2) / 500)  # North America warm spot
-        anomaly -= 4 * np.exp(-((lat_grid - 60)**2 + (lon_grid - 30)**2) / 300)    # Europe cold spot
+        anomaly -= 3 * np.exp(-((lat_grid - 55)**2 + (lon_grid - (-110))**2) / 400)  # Canada cold spot
+        anomaly += 4 * np.exp(-((lat_grid - 35)**2 + (lon_grid - (-95))**2) / 600)   # Southern US warm spot
         
         now = datetime.utcnow()
         run_time = now.replace(minute=0, second=0, microsecond=0)
