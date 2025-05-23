@@ -163,22 +163,70 @@ const App = () => {
               }}>
                 <svg width="900" height="600" viewBox="0 0 900 600">
                   <rect width="900" height="600" fill="#f0f8ff" stroke="#ccc" />
-                  <line x1="0" y1="300" x2="900" y2="300" stroke="#ddd" strokeWidth="1" strokeDasharray="5,5" />
                   
+                  {/* Grid lines */}
+                  <defs>
+                    <pattern id="grid" width="90" height="60" patternUnits="userSpaceOnUse">
+                      <path d="M 90 0 L 0 0 0 60" fill="none" stroke="#e0e0e0" strokeWidth="0.5"/>
+                    </pattern>
+                  </defs>
+                  <rect width="900" height="600" fill="url(#grid)" />
+                  
+                  {/* North America Coastlines */}
+                  {/* United States mainland */}
+                  <path d="M 200 350 Q 180 340 170 325 Q 160 310 155 295 Q 150 280 160 265 Q 170 250 185 240 Q 200 230 220 225 Q 250 220 280 225 Q 320 230 360 235 Q 400 240 440 245 Q 480 250 520 255 Q 560 260 600 265 Q 640 270 680 275 Q 720 280 750 290 Q 780 300 800 320 Q 820 340 825 365 Q 830 390 820 415 Q 810 440 790 455 Q 770 470 740 475 Q 710 480 680 485 Q 650 490 620 485 Q 590 480 560 475 Q 530 470 500 465 Q 470 460 440 455 Q 410 450 380 445 Q 350 440 320 435 Q 290 430 260 425 Q 230 420 210 405 Q 200 390 200 375 Z" fill="none" stroke="#2c3e50" strokeWidth="2"/>
+                  
+                  {/* Canada mainland */}
+                  <path d="M 150 180 Q 130 170 120 155 Q 110 140 115 125 Q 120 110 135 100 Q 150 90 170 85 Q 200 80 230 85 Q 270 90 310 95 Q 350 100 390 105 Q 430 110 470 115 Q 510 120 550 125 Q 590 130 630 135 Q 670 140 710 145 Q 750 150 780 160 Q 810 170 830 185 Q 850 200 860 220 Q 870 240 860 260 Q 850 280 830 295 Q 810 310 780 315 Q 750 320 720 315 Q 690 310 660 305 Q 630 300 600 295 Q 570 290 540 285 Q 510 280 480 275 Q 450 270 420 265 Q 390 260 360 255 Q 330 250 300 245 Q 270 240 240 235 Q 210 230 180 225 Q 150 220 140 200 Q 135 185 150 180 Z" fill="none" stroke="#2c3e50" strokeWidth="2"/>
+                  
+                  {/* Mexico */}
+                  <path d="M 280 460 Q 270 450 265 435 Q 260 420 270 405 Q 280 390 300 385 Q 320 380 340 385 Q 360 390 380 395 Q 400 400 420 405 Q 440 410 460 415 Q 480 420 500 425 Q 520 430 535 440 Q 550 450 560 465 Q 570 480 565 495 Q 560 510 545 520 Q 530 530 510 535 Q 490 540 470 535 Q 450 530 430 525 Q 410 520 390 515 Q 370 510 350 505 Q 330 500 310 495 Q 290 490 280 475 Q 275 465 280 460 Z" fill="none" stroke="#2c3e50" strokeWidth="2"/>
+                  
+                  {/* Great Lakes */}
+                  <ellipse cx="650" cy="280" rx="25" ry="15" fill="none" stroke="#4682b4" strokeWidth="1.5"/>
+                  <ellipse cx="620" cy="290" rx="20" ry="12" fill="none" stroke="#4682b4" strokeWidth="1.5"/>
+                  <ellipse cx="680" cy="275" rx="15" ry="10" fill="none" stroke="#4682b4" strokeWidth="1.5"/>
+                  <ellipse cx="590" cy="300" rx="12" ry="8" fill="none" stroke="#4682b4" strokeWidth="1.5"/>
+                  <ellipse cx="560" cy="310" rx="10" ry="6" fill="none" stroke="#4682b4" strokeWidth="1.5"/>
+                  
+                  {/* Hudson Bay */}
+                  <ellipse cx="550" cy="180" rx="30" ry="40" fill="none" stroke="#4682b4" strokeWidth="1.5"/>
+                  
+                  {/* Temperature anomaly points */}
                   {points.map((point, i) => (
                     <circle
                       key={i}
                       cx={point.x}
                       cy={point.y}
-                      r="4"
+                      r="3"
                       fill={point.color}
-                      opacity="0.8"
+                      opacity="0.7"
                     />
                   ))}
                   
-                  <text x="150" y="180" fontSize="14" fontWeight="600" fill="#2c3e50">CANADA</text>
-                  <text x="400" y="280" fontSize="14" fontWeight="600" fill="#2c3e50">UNITED STATES</text>
-                  <text x="350" y="500" fontSize="14" fontWeight="600" fill="#2c3e50">MEXICO</text>
+                  {/* Country labels */}
+                  <text x="550" y="170" fontSize="16" fontWeight="700" fill="#2c3e50" textAnchor="middle">CANADA</text>
+                  <text x="500" y="340" fontSize="16" fontWeight="700" fill="#2c3e50" textAnchor="middle">UNITED STATES</text>
+                  <text x="420" y="480" fontSize="16" fontWeight="700" fill="#2c3e50" textAnchor="middle">MEXICO</text>
+                  
+                  {/* Major cities */}
+                  <circle cx="180" cy="220" r="3" fill="#d32f2f" stroke="white" strokeWidth="1"/>
+                  <text x="190" y="225" fontSize="11" fill="#d32f2f" fontWeight="600">Vancouver</text>
+                  
+                  <circle cx="450" cy="260" r="3" fill="#d32f2f" stroke="white" strokeWidth="1"/>
+                  <text x="460" y="265" fontSize="11" fill="#d32f2f" fontWeight="600">Chicago</text>
+                  
+                  <circle cx="720" cy="310" r="3" fill="#d32f2f" stroke="white" strokeWidth="1"/>
+                  <text x="730" y="315" fontSize="11" fill="#d32f2f" fontWeight="600">New York</text>
+                  
+                  <circle cx="320" cy="420" r="3" fill="#d32f2f" stroke="white" strokeWidth="1"/>
+                  <text x="330" y="425" fontSize="11" fill="#d32f2f" fontWeight="600">Los Angeles</text>
+                  
+                  <circle cx="650" cy="380" r="3" fill="#d32f2f" stroke="white" strokeWidth="1"/>
+                  <text x="660" y="385" fontSize="11" fill="#d32f2f" fontWeight="600">Miami</text>
+                  
+                  <circle cx="420" cy="510" r="3" fill="#d32f2f" stroke="white" strokeWidth="1"/>
+                  <text x="430" y="515" fontSize="11" fill="#d32f2f" fontWeight="600">Mexico City</text>
                 </svg>
               </div>
 
